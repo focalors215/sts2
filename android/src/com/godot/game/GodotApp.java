@@ -89,6 +89,7 @@ public class GodotApp extends GodotActivity {
 	private FloatingMouseInputController floatingMouseInputController;
 	private BuiltinKeyboardController builtinKeyboardController;
 	private GodotKeyboardHost keyboardHostPlugin;
+	private GodotInputSourceHost inputSourceHostPlugin;
 
 	static {
 		Log.i(TAG, "DIAG GodotApp static init begin versionCode=" + BuildConfig.VERSION_CODE + " versionName=" + BuildConfig.VERSION_NAME + " flavor=" + BuildConfig.FLAVOR);
@@ -910,13 +911,16 @@ public class GodotApp extends GodotActivity {
 		return true;
 	}
 
-	/** Godot creates exactly one keyboard host plugin per activity. */
+	/** Godot reuses the host plugins for this activity's engine instance. */
 	@Override
 	public Set<GodotPlugin> getHostPlugins(Godot godot) {
 		if (keyboardHostPlugin == null) {
 			keyboardHostPlugin = new GodotKeyboardHost(godot);
 		}
-		return Collections.singleton(keyboardHostPlugin);
+		if (inputSourceHostPlugin == null) {
+			inputSourceHostPlugin = new GodotInputSourceHost(godot);
+		}
+		return Set.of(keyboardHostPlugin, inputSourceHostPlugin);
 	}
 
 	/** Host view handed to the keyboard controllers (the decor view tree). */
@@ -976,6 +980,9 @@ public class GodotApp extends GodotActivity {
 	public void onWindowFocusChanged(boolean hasFocus) {
 		super.onWindowFocusChanged(hasFocus);
 		currentWindowFocused = hasFocus;
+		if (inputSourceHostPlugin != null) {
+			inputSourceHostPlugin.onWindowFocusChanged(hasFocus);
+		}
 		highRefreshRateController.onWindowFocusChanged(this, getGodot(), hasFocus);
 		if (hasFocus) {
 			requestDisplayRefreshRate("onWindowFocusChanged");

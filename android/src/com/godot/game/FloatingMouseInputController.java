@@ -171,7 +171,7 @@ final class FloatingMouseInputController {
 		try {
 			// Generic delivery bypasses Android touch double-tap/long-press synthesis.
 			// Godot still queues through its native input handler and applies its own transform.
-			return streamInput.onGenericMotionEvent(synthetic);
+			return streamInput.onSyntheticTouchMouseEvent(synthetic);
 		} finally {
 			synthetic.recycle();
 		}
