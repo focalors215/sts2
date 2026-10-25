@@ -91,6 +91,8 @@ The creation of this project relies heavily on the explorations of the open-sour
   Provides the non-ZIP archive reader used by local payload and MOD imports. ZIP keeps the existing Java path; encrypted entries, links, and special files are rejected before staging is committed.
 - **[Godot Engine / Godot.NET.Sdk](https://github.com/godotengine/godot)**
   Provides the engine and Android template. The test-only Godot.NET.Sdk 4.5.1 harness also exercises native resource preparation and shader lifecycle behavior using synthetic scenes, without commercial game data or additional APK dependencies.
+- **[Spine Runtimes / spine-godot](https://github.com/EsotericSoftware/spine-runtimes/tree/4.2/spine-godot)**
+  Combat animation warmup constructs a fresh native Spine sprite instead of duplicating and stripping its mesh children. The [native regression](doc/runtime/compat-pack-loading-flow.md) uses an independently supplied official extension and synthetic artwork; it adds no APK dependency. Spine's own runtime/editor licensing applies, not MIT.
 - **[.NET / Mono](https://github.com/dotnet/runtime) / [Ekyso StS2-Launcher](https://github.com/Ekyso/StS2-Launcher)**
   The existing custom Android Mono runtime is retained. An **opt-in experimental memory-total repair** changes one SHA-pinned ARM64 instruction, without changing heap limits or the MOD itself. It is not a source rebuild or a complete Android memory-accounting fix; the native library remains unchanged by default. See [scope, test builds and rollback](doc/build/building-and-packaging.md#41-实验性-mono-内存总量修复默认关闭).
 - **[Ekyso Harmony / MonoMod](https://github.com/Ekyso/Harmony)**

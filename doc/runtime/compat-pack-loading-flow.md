@@ -255,7 +255,7 @@ STS2Mobile.ModEntry
    - `preload_vfx_tree_warmup_scope`：VFX 实际播放范围，默认 `safe`；`safe` 只跑安全名单，包含常见战斗 VFX 与猎人小刀/匕首 VFX；`all` 会逐个尝试让 `res://scenes/vfx/**/*.tscn` 全部进树跑帧，单项失败会记录并跳过，主要用于卸载重装后填充 Godot shader cache 的高内存诊断，不会自动执行卡牌/怪物战斗逻辑。
    - `preload_vfx_tree_warmup_frames`：普通安全名单 VFX 跑帧数，默认 `3`，启动器提供 `1/3/6/12`；小刀/匕首 VFX 会使用更高下限。
    - `preload_vfx_retain_cache_enabled`：保留已预热 VFX 场景缓存，默认 `false`；开启后与缓存保护配合减少战斗中重复首次实例化。
-   - `preload_combat_animation_warmup_mode`：战斗动画预热，默认 `off`；当前房间实际出场的角色逐个创建独立原生 `SpineSprite` 副本，用 `Duplicate(0)` 排除脚本、信号连接、分组及场景重实例化，进树前移除子节点以避免附带音频/粒子自动播放。`safe` 只采样按名称筛选的安全 clip；`all` 采样全部可用 clip，每个角色最多 128 项。副本在临时全屏遮罩后绘制并及时释放，不修改活体角色 animation state、不调用 `SetAnimationTrigger()`、不执行状态图条件或游戏事件回调；Spine API 不支持时跳过该角色，不回落到活体预热。代价是 trigger 附带的 VFX/音效不再由动画预热覆盖；独立命中特效选项保持原行为。
+   - `preload_combat_animation_warmup_mode`：战斗动画预热，默认 `off`；当前房间实际出场的角色逐个通过 `ClassDB.Instantiate("SpineSprite")` 构造独立原生预览，复用只读 skeleton data/material，复制当前 skin 的 attachment map 与必要渲染属性，由 Spine 自己创建、持有并释放 skeleton、animation state 和网格子节点。不使用 `Duplicate()`，不复制角色脚本、信号连接、音频或粒子子树，也不逐个移除/释放 Spine 的网格子节点。`safe` 只采样按名称筛选的安全 clip；`all` 采样全部可用 clip，每个角色最多 128 项。预览在临时全屏遮罩后绘制，只在 Godot 主线程调用原生 API；临时 Variant/binding 当场释放，预览退出树时先释放其专属 binding 并阻止后续采样，最终只释放预览根节点。不 Dispose 活体角色或共享资源的借用 binding，不修改活体角色 animation state、不调用 `SetAnimationTrigger()`、不执行状态图条件或游戏事件回调；Spine API 不支持时跳过该角色，不回落到活体预热。代价是 trigger 附带的 VFX/音效不由动画预热覆盖；独立命中特效选项及两个选项的默认值保持不变。
    - `preload_combat_animation_warmup_frames`：每个独立 Spine clip 的采样帧数，默认 `1`，启动器提供 `1/2/3/6`；只处理当前战斗房间，不在启动页实例化全游戏所有怪物。
    - `preload_combat_hit_effect_warmup_enabled`：战斗命中特效预热，默认 `false`；开启后在当前战斗房间遮罩后走真实命中渲染路径，实例化伤害数字、命中火花、斩击/钝击 VFX，并以 0 音量触发当前怪物和常见敌人受击 FMOD 事件来预热 sample data，不会改血量、出牌或战斗历史。
    - `preload_combat_code_enabled`：额外预热攻击/伤害/VFX 托管方法，默认 `false`。
@@ -267,6 +267,17 @@ STS2Mobile.ModEntry
    Android 附加设置页在顶部“系统”分区的系统卡片中显示 `preload_enabled` 总开关、预加载下方的 `android_display_refresh_rate_mode` 三挡单选（默认高刷 / 请求 60Hz / 跟随系统），以及默认关闭的性能 overlay 开关；游戏内 Android 设置也提供同一刷新率选择，写回后通过 Java bridge 立即更新当前游戏 Activity 的请求。预加载右侧箭头打开预加载详细管理 BottomSheet，默认不会自动展开。总开关开/关只写入自身，不改写上述细分项目；BottomSheet 的“恢复默认”只重置细分项目，不修改 `preload_enabled`。预加载详细 BottomSheet 刚打开时内容区上滑会切到全屏展开，展开后滚动内容区不会下拉关闭，只有顶部手柄接受下拉关闭手势。默认组合保持本次改动前的预加载行为，不额外启用 VFX/菜单/shader/code/gameplay warmup，但会保留保护已预热缓存与学习漏载资源。
    缩放事件订阅随场景节点 `TreeExiting` 立即解除、重新进树恢复，重复 Ready 不叠加，避免旧房间、事件布局和主菜单被静态事件长期持有。资源释放仍保留 disposal guard，不新增强制 GC 或提前 Dispose；事件初始化也不新增吞异常或“假成功”兜底。
    `AndroidParticlePreprocessPatches` 只在背景初始化后处理已知瀑布巨人/欧罗巴斯背景中的标准持续环境粒子：preprocess 超过两个寿命周期时缩为一个完整周期加原相位余数，不改 amount/material/lifetime/speed。爆发型、一次性、拖尾、sub-emitter、未知材质和本来不超过两周期的粒子不改；因此欧罗巴斯长寿命星点和爆发型特效并不因这个补丁被截短。这是减少首次背景预模拟负担的有限修正，不代表已确认具体闪退或卡死的根因。合成边界回归：`port-mod/tools/test-resource-safety.sh`。
+
+   独立 Spine 预览的原生回归位于 `port-mod/tests/SpineWarmup.Tests`，使用官方 Godot 4.5.1 .NET、.NET 9 SDK 和另行获取的官方 [Spine 4.2 GDExtension](https://esotericsoftware.com/spine-godot)；原生库受 [Spine Runtimes License](https://esotericsoftware.com/spine-runtimes-license) 约束，仅放在 ignored 路径，不随测试源码提交，不新增 APK 依赖。fixture 的 skeleton/atlas 为手写合成数据，纹理由测试生成，不需要商业游戏资源。Linux 无桌面时安装 Xvfb/Mesa 后在仓库根运行：
+
+   ```bash
+   GODOT=/path/to/Godot_v4.5.1-stable_mono_linux.x86_64 \
+   DOTNET=/path/to/dotnet9/dotnet \
+   SPINE_EXTENSION_DIR=/path/to/official-spine-extension/bin \
+   bash port-mod/tests/SpineWarmup.Tests/run-native.sh
+   ```
+
+   runner 先构建并导入，再通过真实 OpenGL 窗口/Xvfb 验证网格像素、动画位移、组合 skin 隔离、原角色状态/音频/粒子不变、重复创建销毁、临时 wrapper 连接回收、离房中断和迟到 GC；实际回归不能用 `--headless` 代替。桌面原生回归不等同于 Android/Adreno 真机战斗验证；仍需在目标设备上分别检查动画预热与命中特效预热的组合。
 
    兼容层的通用/主菜单资源、学习缓存/实战补全资源与 VFX 启动预热已恢复为引入后台加载之前的同步路径：在 Godot 主线程调用 `ResourceLoader.Load`，通用资源和 warm cache 每处理 8 项让出一帧，VFX 每项加载、实例化和释放后让帧；开启实际播放预热时仍等待既定渲染帧数。保留原有 `Reuse` / `Ignore` 缓存语义、预加载范围、缓存保护和全部设置，不再通过共用的 `_loading` 标志等待后台请求。单个同步加载仍可能暂时阻塞主线程，分批让帧不是硬实时保证。此回退只改变启动预热，不撤销下面原版 `AssetLoadingSession` 的异步加载及其协作帧预算，也不撤销 Shader 节点处理优化。
 
@@ -330,13 +341,25 @@ OS.GetDataDir()/port_compat.pck
 - 缓存材质不依赖 NodeAdded 猜测：`NCard.Reload` 专门修复卡面 portrait/canvas-group blur，`NMainMenu._Ready` 修复主菜单 blur，`NEpochSlot._Ready` 修复时间线 blur，`NRadialBlurVfx._Ready` 修复径向 blur；`AssetCache.GetMaterial()` 对已知卡面 blur material 路径也返回替换材质的副本。
 - 这些已知动态路径写回的是替代 `ShaderMaterial` 副本，而不是把原始共享材质换成新 shader；当前没有覆盖任意晚到 `CanvasItem.Material` 赋值的通用 helper。若后续集成 owner 暴露专用更新入口，调用方必须沿用这条替代材质路径；本兼容层当前不对不存在的 helper 或自动重写能力作承诺。
 
+**Maleoon OpenGL 回能粒子兼容**
+
+`shader_compatibility_mode` 同时控制一项定向粒子降级：只有 **Android + 实际 `gl_compatibility` 渲染后端 + GPU 名称包含 Maleoon** 时生效。判断使用 `RenderingServer.GetCurrentRenderingMethod()`，不按手机品牌或项目里请求的 Vulkan 设置猜测；非 Maleoon、Vulkan、iOS 和 offline bootstrap 不应用此降级。
+
+- 在 `NEnergyCounter.Create()` 返回、场景首次进树前，核对原版铁甲能量计、`EnergyVfxFront` 和 `vfx_fire_embers_straight` 的完整场景路径，并要求其使用该 front 场景内嵌的 `ParticleProcessMaterial`、原版 one-shot 形状且没有自定义粒子脚本。MOD 场景和外部 MOD 材质不接管。
+- 为这一条发射器浅复制材质，只设置 `TurbulenceEnabled=false`；共享原材质及其曲线/纹理不修改，也不深复制。噪声强度设为零不等同于关闭该 shader 特性。
+- 保留粒子数量、颜色、寿命、发射形状、原版 `Restart()` 与回能时序，其他回能火焰/光环和战斗逻辑不变。视觉代价仅为这层火星不再做 turbulence 扰动，不是停用整个 VFX 或全局关闭 GPU 粒子。
+- 开关运行时开启时也会检查现有的已知能量计；已经降级的副本不会重复复制。关闭后不再处理新实例，已写入的副本沿用本节 shader variants 的重启恢复规则。
+- 命中时每进程记录一次 `Shader compatibility Maleoon energy embers: turbulence disabled on per-instance material`，同时记录实际 adapter 和 renderer。该窄范围规避仍需要 Maleoon 真机的首战、后续回能和重新启动验证，不代表所有首战/首击卡死已解决。
+
+原生回归 `port-mod/tests/FramePreparation.Tests` 覆盖首次进树前处理、平台/GPU/渲染器/开关边界、材质隔离、MOD 排除、原版 `Restart()` 和重复设置应用。桌面 OpenGL 回归不替代华为驱动验证。
+
 古卡（先古卡）遮罩使用的 `res://shaders/blur/canvas_group_mask_blur.gdshader` 明确排除在替换表之外；overlay 不提供、不预加载 `canvas_group_mask_blur` 的移动 variant，因此该遮罩继续使用原版 shader。这个排除不妨碍上面的 `NCard.Reload` 专用路径修复其它卡面 blur 缓存材质。
 
 `TransitionMaterialPatches` 会在 `NTransition._Ready` 后复制场景默认 `ShaderMaterial`，并在原版 `AssetCache.GetMaterial()` 返回 `fade_transition_mat.tres` / `fight_transition_mat.tres` 时返回缓存材质的副本。全局 disposal guard 已阻止 cache cleanup 显式释放资源；该补丁仍作为纵深保护，隔离 transition tween 对共享材质状态的修改并兼容旧兼容包行为。
 
 `v0.107.0-beta`、`v0.107.1`、`v0.108.0`、共享 `v0.109.x` / `v0.110.x` 与独立 `v0.111.0` target 的 `MapDrawingSceneCachePatches` 同样作为资源 owner 纵深保护：它拦截 `NMapDrawings.CreateLineForPlayer()`，让地图画笔绘制/橡皮线条从 Android 兼容层自持有的 `PackedScene` 实例化，避免长期字段依赖已经离开 cache 索引的场景；橡皮线条会同步刷新 `_eraserMaterial`，保留原版保存时通过材质判断 eraser line 的行为。
 
-关闭 `shader_compatibility_mode` 时会退订节点监听并停止后续替换，但已经写入节点或缓存字段的替换材质不会反向恢复为原版；要还原本进程中已替换的材质，必须退出并重启游戏。重启后开关关闭的进程才不会重新应用这些 shader variants。
+关闭 `shader_compatibility_mode` 时会退订节点监听并停止后续替换，但已经写入节点或缓存字段的替换材质（包括上述粒子材质副本）不会反向恢复为原版；要还原本进程中已替换的材质，必须退出并重启游戏。重启后开关关闭的进程才不会重新应用这些 shader variants 或粒子降级。
 
 ## 10. 普通用户 MOD 加载
 
