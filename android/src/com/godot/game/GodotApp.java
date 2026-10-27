@@ -537,6 +537,12 @@ public class GodotApp extends GodotActivity {
 	}
 
 	private void ensureLaunchPreparedBeforeGodot(boolean launchPrepared) {
+		try {
+			ExtraSettingsRepository repository = new ExtraSettingsRepository(this);
+			new ModInstallStore(getFilesDir(), repository.getModsRootDir()).recover();
+		} catch (IOException exception) {
+			throw new IllegalStateException("Cannot start Godot before MOD installation recovery succeeds.", exception);
+		}
 		CompatPackManager compatPackManager = new CompatPackManager(this);
 		try {
 			compatPackManager.requireSelectedPackReady();

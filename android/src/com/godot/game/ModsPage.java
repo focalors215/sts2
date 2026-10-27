@@ -1,6 +1,7 @@
 package com.godot.game;
 
 import android.animation.ValueAnimator;
+import android.app.Activity;
 import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
@@ -151,6 +152,7 @@ public final class ModsPage {
 	private JSONObject cachedSettings;
 	private Runnable pendingSearchRefresh;
 	private boolean dataLoaded;
+	private boolean deletionRunning;
 	private LoadedMods loadedSnapshot;
 	private String dragGhostGroupId;
 	private int dragGhostIndex = -1;
@@ -3623,15 +3625,7 @@ public final class ModsPage {
 			.setMessage(context.getString(R.string.confirm_delete_mod_message) + "\n\n" + entry.relativePath)
 			.setNegativeButton(android.R.string.cancel, null)
 			.setPositiveButton(android.R.string.ok, (dialog, which) -> {
-				try {
-					repository.deleteMod(entry);
-					selectedModIds.remove(entry.modId);
-					expandedModIds.remove(entry.modId);
-					fullDescriptionModIds.remove(entry.modId);
-					refreshList();
-				} catch (Exception exception) {
-					actions.showError(exception);
-				}
+				deleteSelectedMods(java.util.Collections.singletonList(entry));
 			})
 			.show();
 	}
@@ -3664,22 +3658,46 @@ public final class ModsPage {
 				.setMessage(context.getString(R.string.mod_batch_delete_confirm, selected.size()))
 				.setNegativeButton(android.R.string.cancel, null)
 				.setPositiveButton(android.R.string.ok, (dialog, which) -> {
-					try {
-						repository.deleteMods(selected);
-						for (ExtraSettingsRepository.ModEntry entry : selected) {
-							selectedModIds.remove(entry.modId);
-							expandedModIds.remove(entry.modId);
-							fullDescriptionModIds.remove(entry.modId);
-						}
-						refreshList();
-					} catch (Exception exception) {
-						actions.showError(exception);
-					}
+					deleteSelectedMods(selected);
 				})
 				.show();
 		} catch (Exception exception) {
 			actions.showError(exception);
 		}
+	}
+
+	private void deleteSelectedMods(List<ExtraSettingsRepository.ModEntry> entries) {
+		if (deletionRunning) return;
+		deletionRunning = true;
+		actions.showMessage(context.getString(R.string.status_busy_delete_mod));
+		MOD_SCAN_EXECUTOR.execute(() -> {
+			try {
+				String notice = entries.size() == 1 ? repository.deleteMod(entries.get(0)) : repository.deleteMods(entries);
+				mainHandler.post(() -> {
+					deletionRunning = false;
+					if (isRemovalUiUnavailable()) return;
+					for (ExtraSettingsRepository.ModEntry entry : entries) {
+						selectedModIds.remove(entry.modId);
+						expandedModIds.remove(entry.modId);
+						fullDescriptionModIds.remove(entry.modId);
+					}
+					refreshList();
+					if (!TextUtils.isEmpty(notice)) {
+						new MaterialAlertDialogBuilder(context).setTitle(R.string.mod_import_file_notice_title)
+							.setMessage(notice).setPositiveButton(android.R.string.ok, null).show();
+					}
+				});
+			} catch (Exception exception) {
+				mainHandler.post(() -> {
+					deletionRunning = false;
+					if (!isRemovalUiUnavailable()) actions.showError(exception);
+				});
+			}
+		});
+	}
+
+	private boolean isRemovalUiUnavailable() {
+		return context instanceof Activity && (((Activity) context).isFinishing() || ((Activity) context).isDestroyed());
 	}
 
 	private List<ExtraSettingsRepository.ModEntry> selectedEntries() {

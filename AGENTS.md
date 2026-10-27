@@ -1,7 +1,7 @@
 # AGENTS.md
 
 面向后续编码代理/维护者的项目速览与操作约定。当前目录为本仓库根目录。
-最后同步：2026-10-24。
+最后同步：2026-10-25。
 
 ## 0. 总原则
 
@@ -302,6 +302,7 @@ s2_re/
 <files>/launcher/selected_instance.json     # 当前启动配置解析结果
 <files>/launcher/selected_game_version.json # legacy 兼容诊断记录，指向当前 payload
 <files>/launcher/selected_compat_pack.json  # 当前启动配置解析出的兼容包诊断记录
+<files>/launcher/mod-installs/<scope_sha256>/ # 按实际 MOD 根隔离的安装归属、回滚日志与 preserved 备份
 <files>/default/<account>/settings.save     # 全局存档/设置目录，默认 account=1
 <files>/mods/                              # 全局普通用户 MOD 目录
 <files>/.config/                           # HOME=<files> 下的应用级 MOD 自有配置/日志，不自动按 profile 隔离
@@ -734,7 +735,7 @@ adb shell run-as com.megacrit.sts2re ls files/.godot/mono/publish/arm64
 - 创意工坊“使用尖塔补给站下载”保存在 `sts2_steam_workshop.supply_station_enabled`，默认 `false`，只影响新开始的下载，不是 `settings.save` / C# 协议。开启后 `SpireSupplyStationClient` 直接提供 descriptor/CDN 授权，禁止读取 Steam refresh token 或强制先走 CM 分支解析；复用 `UgcWorkshopDownloader.downloadAuthorized` 和现有导入流程。`supply-station-default` 仅为站点默认内容的安装命名空间，必须标明游戏分支未验证，不能伪装成 `public` / `public-beta`；来源记录为 `spire_supply_station`。Steam 记录切到站点仍走冲突确认，站点记录在开关关闭时不自动访问站点更新。站点与 Steam 错误要区分：只有 Steam 授权失败提示开启功能，普通网络/文件权限失败不提示；关于图标必须位于开关左侧并保留说明、鸣谢、版权与外链。浏览/前置/更新元数据仍使用现有 Steam 路径，前置检查失败需用户显式确认后才允许只下载当前项。凭证不得写日志/metadata；刷新不能改变当前下载内容身份。说明见 `doc/modding/mod-and-compat-notes.md`，回归见 `SpireSupplyStationClientTest`。
 - `settings.save` 的 Android-only key 是 Java 附加设置与 Harmony patcher/Java 启动参数的协议；改 key 要同步 `ExtraSettingsRepository`、页面 UI、`AndroidSettingsBridge` 或 `GodotApp.getCommandLine()` 等消费者、相关 patches，并记录到 `.agent/agent-docs/changelog/`。`log_level`、`android_performance_overlay_enabled` 和 `android_display_refresh_rate_mode` 额外同步到 SharedPreferences，避免原版游戏保存 settings 时丢失这些 Android 字段。刷新率新字符串由 `AndroidSettingsMerge` 保留，旧高刷布尔值只在读取旧配置时迁移，不双写旧 key。
 - `<files>/default/<account>` 的账号选择逻辑与旧移植版兼容但较脆弱，多账号/自定义 platform player id 改动要同时检查 Java 与兼容 MOD。
-- 当前普通 MOD 目录由 launch profile 决定：`mods_mode=global` 使用 `<files>/mods`，`mods_mode=isolated` 使用 `<files>/instances/<profile_id>/mods`；MOD 导入先进入 cache staging 并按 manifest `id` 检测同 ID 冲突，用户选择“使用新 MOD”时才删除同 ID 原 MOD 后提交，避免两个同 ID 项目开关连体；随后普通本地/Nexus 导入按 staging 到 MOD 根的实际相对路径检测文件覆盖，若将覆盖不属于本次同 ID 替换的既有 `.dll` / `.pck` / `.json` 或资源文件，必须弹窗让用户明确确认后才提交，避免 A MOD 文件被 B MOD 静默替换；Workshop 下载也先进入 staging，但下载前会弹出分支/manifest 候选，最终以设置中的导入分组下 `<branch>/<published_file_id>/` 作为 item 边界，更新同一 item 时固定沿用已安装记录分支并直接覆盖同 ID 旧项；同一分支仍整体替换该目录，详情/删除/前置判断优先按 `<files>/workshop/library/index.json` 记录的 item 根目录执行；MOD 分组通过 `sts2_mod_profiles` 的 `mod_groups`、`hidden_mod_groups`、`mod_group_assignments`、`mod_group_order` 与 `mod_order` 维护，只影响启动器展示；拖拽、批量分组、重命名和删除分组不得改动 MOD 文件位置。旧 `.sts2_mod_group` 目录标记仅作为历史兼容读取。新增路径相关功能必须同步 Java 管理页、C# `AppPaths`、ModLoader patches 和迁移/备份逻辑。
+- 当前普通 MOD 目录由 launch profile 决定：`mods_mode=global` 使用 `<files>/mods`，`mods_mode=isolated` 使用 `<files>/instances/<profile_id>/mods`；MOD 导入先进入 cache staging 并按 manifest `id` 确认同 ID 替换，本地/Nexus 完整归档/目录默认完整更新，可在冲突 Dialog 取消勾选以导入补丁；单文件仅覆盖。`ModInstallStore` 按实际 MOD 根在 `<files>/launcher/mod-installs/<scope_sha256>/` 持久记录路径、长度/SHA-256、manifest 身份/版本与共享归属：完整更新只删除未修改且归属完全被替换的旧记录文件，跨目录同 ID 也清理；补丁保留未提供的文件及原有归属；多 MOD 辅助文件按最近 manifest 目录归属，歧义路径共享。未知/运行时生成文件不自动纳管，无记录历史安装只处理已知主文件并提示；修改过的旧文件在更新时保留并提示，卸载时先备份到 scope 下 `preserved/<uuid>/` 再移除。更新保留原有单 MOD 启用、分组、备注和顺序，不能再调用卸载清理偏好。非独占/修改过的目标需另行明确覆盖确认，确认跨 MOD 覆盖后转移路径归属。准备与提交绑定 MOD 根，切换隔离 scope 后拒绝旧 staging；哈希/冲突检查在后台逐项重查。文件与安装记录使用独占锁、写前日志及幂等进程中断恢复，损坏记录/符号链接/目录类型冲突 fail closed，启动前必须恢复；不承诺断电持久性。Workshop 仍以 `<group>/<branch>/<published_file_id>/` 整 item 替换（包含 item 内未知内容），同时按记录清理 item 外同 ID 文件，共用回滚事务；详情/删除/前置判断优先使用 `<files>/workshop/library/index.json` 的 item 根目录，library 记录成功后才 finalize 文件事务。MOD 分组仍仅更新 `sts2_mod_profiles` 的展示元数据，不移动真实文件；旧 `.sts2_mod_group` 仅兼容读取。回归：`ModInstallReplacementTest`、`ModInstallStoreTest`、`ModImportSafetyTest`。路径规则不改变 C# `AppPaths`/ModLoader 或普通 MOD 的目录布局。
 - MOD manifest 的 id/pck_name 及其受支持拼写只能是文件基名；导入预检必须在别名生成之前拒绝路径分隔符、控制字符和单独的 `.`/`..`。Java/C# 别名创建与删除还要校验同目录边界，不跟随清单/别名符号链接；不可把 ZIP Slip 检查当作 manifest 路径安全检查。回归：`android/test/com/godot/game/ModImportSafetyTest.java` 与 `port-mod/tests/ModManifestAlias.Tests`。
 - 本地存档快照、Steam Cloud 与 WebDAV 云存档同步必须使用当前 launch profile 的 account root：`save_mode=global` 使用 `<files>/default/<account>`，`save_mode=isolated` 使用 `<files>/instances/<profile_id>/default/<account>`；不要把存档功能固定写死到全局 `<files>/default/1`。WebDAV 只同步白名单 STS2 存档文件，远端不做删除镜像；`settings.save` 默认不同步，除非用户显式开启实验性开关。
 - 两套云同步的 baseline 只能推进已确认内容相同的文件，跳过上传/拉取及部分成功时必须保留未同步文件的共同祖先；旧 `local_sha1 != remote_sha1` 记录不可信，应按无共同基线要求显式选择。非强制拉取不得覆盖仅本地变化的文件。快照写 `.part` 后校验并发布，恢复时先验证中央目录、schema 1 清单、长度和 CRC，再做可回滚目录替换；staging/rollback 不得放在会被全局账号发现扫描的 `<files>/default/` 下，恢复失败不能裁剪旧恢复点。回归：`CloudSyncSafetyTest`（两 provider）与 `LocalSaveSnapshotSafetyTest`；运行 `tools/android/gradle-with-s2-env.sh testMonoReleaseUnitTest`，Robolectric 仅为测试依赖。
