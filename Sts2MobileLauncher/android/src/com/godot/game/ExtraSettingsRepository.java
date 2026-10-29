@@ -51,6 +51,9 @@ public final class ExtraSettingsRepository {
 	public static final String KEY_SCREEN_ROTATION_MODE = "android_screen_rotation_mode";
 	public static final String KEY_IN_GAME_OVERLAY_ENABLED = "android_in_game_overlay_enabled";
 	public static final String KEY_FLOATING_MOUSE_ENABLED = "android_floating_mouse_enabled";
+	public static final String KEY_BUILTIN_FULL_KEYBOARD = "android_builtin_full_keyboard";
+	public static final String KEY_FLOATING_KEYBOARD_ENABLED = "android_floating_keyboard_enabled";
+	public static final String KEY_VOLUME_UP_SOFT_KEYBOARD = "android_volume_up_soft_keyboard";
 	public static final String KEY_DEV_TOOLS_ENABLED = "android_dev_tools_enabled";
 	public static final String KEY_DEV_INSPECTOR_WRITABLE = "android_dev_inspector_writable";
 	public static final String LOG_LEVEL_OFF = "off";
@@ -108,6 +111,7 @@ public final class ExtraSettingsRepository {
 		ensureDirectory(getAccountRootDir());
 		File modsRoot = getModsRootDir();
 		ensureDirectory(modsRoot);
+		recoverModInstallTransactions(modsRoot);
 		recoverWorkshopInstallTransactions(modsRoot);
 		normalizeRuntimeModAliases(modsRoot);
 	}
@@ -207,6 +211,8 @@ public final class ExtraSettingsRepository {
 		settings.put("quick_sl_enabled", true);
 		settings.put(KEY_IN_GAME_OVERLAY_ENABLED, false);
 		settings.put(KEY_FLOATING_MOUSE_ENABLED, false);
+		settings.put(KEY_BUILTIN_FULL_KEYBOARD, false);
+		settings.put(KEY_FLOATING_KEYBOARD_ENABLED, false);
 		settings.put(KEY_DEV_TOOLS_ENABLED, false);
 		settings.put(KEY_DEV_INSPECTOR_WRITABLE, false);
 		settings.put("mod_settings", JSONObject.NULL);
@@ -273,6 +279,8 @@ public final class ExtraSettingsRepository {
 		changed |= putIfMissing(settings, "quick_sl_enabled", true);
 		changed |= putIfMissing(settings, KEY_IN_GAME_OVERLAY_ENABLED, false);
 		changed |= putIfMissing(settings, KEY_FLOATING_MOUSE_ENABLED, false);
+		changed |= putIfMissing(settings, KEY_BUILTIN_FULL_KEYBOARD, false);
+		changed |= putIfMissing(settings, KEY_FLOATING_KEYBOARD_ENABLED, false);
 		changed |= putIfMissing(settings, KEY_DEV_TOOLS_ENABLED, false);
 		changed |= putIfMissing(settings, KEY_DEV_INSPECTOR_WRITABLE, false);
 		return changed;
@@ -284,6 +292,19 @@ public final class ExtraSettingsRepository {
 		} catch (Exception exception) {
 			return false;
 		}
+	}
+
+	/** Built-in full PC keyboard switch; off keeps the original system IME path. */
+	public boolean isBuiltinFullKeyboardEnabled() {
+		try {
+			return loadSettingsJson().optBoolean(KEY_BUILTIN_FULL_KEYBOARD, false);
+		} catch (Exception exception) {
+			return false;
+		}
+	}
+
+	public static boolean isBuiltinKeyboardEnabled(android.content.Context context) {
+		return new ExtraSettingsRepository(context).isBuiltinFullKeyboardEnabled();
 	}
 
 	public boolean isDevToolsEnabled() {
@@ -707,30 +728,22 @@ public final class ExtraSettingsRepository {
 		}
 	}
 
-	public String importMod(Uri inputUri) throws Exception {
-		PreparedModImport preparedImport = prepareModImport(inputUri);
-		return commitPreparedModImport(preparedImport, true, false);
-	}
 
-	public String importDownloadedModFile(File sourceFile, String displayName) throws Exception {
-		PreparedModImport preparedImport = prepareDownloadedModImport(sourceFile, displayName);
-		return commitPreparedModImport(preparedImport, true, false);
-	}
 
 	public PreparedModImport prepareDownloadedModDirectory(File sourceDirectory, String displayName) throws Exception {
 		if (sourceDirectory == null || !sourceDirectory.isDirectory()) {
 			throw new IOException(context.getString(R.string.workshop_download_missing_directory));
 		}
-		File singleZip = findSingleImportZip(sourceDirectory);
-		if (singleZip != null) {
-			return prepareDownloadedModImport(singleZip, TextUtils.isEmpty(displayName) ? singleZip.getName() : displayName);
+		File singleArchive = findSingleImportArchive(sourceDirectory);
+		if (singleArchive != null) {
+			return prepareDownloadedModImport(singleArchive, TextUtils.isEmpty(displayName) ? singleArchive.getName() : displayName);
 		}
 		File stagingRoot = createModImportTempRoot();
 		deleteRecursively(stagingRoot);
 		ensureDirectory(stagingRoot);
 		try {
 			copyDirectoryContentsForModImport(sourceDirectory, stagingRoot);
-			return finishPreparedModImport(stagingRoot, displayName, sanitizeFileName(TextUtils.isEmpty(displayName) ? sourceDirectory.getName() : displayName));
+			return finishPreparedModImport(stagingRoot, displayName, sanitizeFileName(TextUtils.isEmpty(displayName) ? sourceDirectory.getName() : displayName), true);
 		} catch (Exception exception) {
 			deleteRecursively(stagingRoot);
 			throw exception;
@@ -746,12 +759,24 @@ public final class ExtraSettingsRepository {
 			String normalizedName = (displayName == null) ? "imported_mod" : sanitizeFileName(displayName);
 			String lowerName = normalizedName.toLowerCase(Locale.ROOT);
 			boolean shouldUnzip = lowerName.endsWith(".zip") || isZipUri(inputUri);
+			boolean fullPackage = shouldUnzip;
 			if (shouldUnzip) {
 				unzipIntoDirectory(inputUri, stagingRoot);
 			} else {
-				copyUriToFile(inputUri, new File(stagingRoot, normalizedName));
+				File archiveSource = new File(stagingRoot.getParentFile(), stagingRoot.getName() + "-source-" + normalizedName);
+				try {
+					copyUriToFile(inputUri, archiveSource);
+					if (ArchiveExtractor.isArchive(archiveSource)) {
+						fullPackage = true;
+						extractArchiveFile(archiveSource, stagingRoot);
+					} else {
+						copyRecursively(archiveSource, new File(stagingRoot, normalizedName));
+					}
+				} finally {
+					deleteRecursively(archiveSource);
+				}
 			}
-			return finishPreparedModImport(stagingRoot, displayName, normalizedName);
+			return finishPreparedModImport(stagingRoot, displayName, normalizedName, fullPackage);
 		} catch (Exception exception) {
 			deleteRecursively(stagingRoot);
 			throw exception;
@@ -768,29 +793,30 @@ public final class ExtraSettingsRepository {
 		try {
 			String normalizedName = sanitizeFileName(TextUtils.isEmpty(displayName) ? sourceFile.getName() : displayName);
 			String lowerName = normalizedName.toLowerCase(Locale.ROOT);
-			boolean shouldUnzip = lowerName.endsWith(".zip") || isZipFile(sourceFile);
-			if (shouldUnzip) {
+			boolean zipArchive = lowerName.endsWith(".zip") || isZipFile(sourceFile);
+			boolean shouldUnzip = zipArchive || ArchiveExtractor.isArchive(sourceFile);
+			if (zipArchive) {
 				unzipFileIntoDirectory(sourceFile, stagingRoot);
+			} else if (shouldUnzip) {
+				extractArchiveFile(sourceFile, stagingRoot);
 			} else {
 				copyRecursively(sourceFile, new File(stagingRoot, normalizedName));
 			}
-			return finishPreparedModImport(stagingRoot, displayName, normalizedName);
+			return finishPreparedModImport(stagingRoot, displayName, normalizedName, shouldUnzip);
 		} catch (Exception exception) {
 			deleteRecursively(stagingRoot);
 			throw exception;
 		}
 	}
 
-	private PreparedModImport finishPreparedModImport(File stagingRoot, String displayName, String normalizedName) throws IOException {
+	private PreparedModImport finishPreparedModImport(File stagingRoot, String displayName, String normalizedName, boolean fullPackage) throws IOException {
+		File modsRoot = getModsRootDir().getAbsoluteFile();
+		new ModInstallStore(context.getFilesDir(), modsRoot).recover();
 		validateModImportPaths(stagingRoot);
 		normalizeRuntimeModAliases(stagingRoot);
 		List<ModEntry> incomingEntries = new ArrayList<>();
 		collectManifestFiles(stagingRoot, stagingRoot, incomingEntries);
-		List<String> relativeFilePaths = collectRelativeFilePaths(stagingRoot);
-		List<ModImportConflict> conflicts = findImportConflicts(incomingEntries);
-		PreparedModImport preparedImport = new PreparedModImport(stagingRoot, displayName, normalizedName, incomingEntries, conflicts, Collections.emptyList(), relativeFilePaths);
-		List<ModImportPathConflict> pathConflicts = findImportPathConflicts(preparedImport, conflicts);
-		return new PreparedModImport(stagingRoot, displayName, normalizedName, incomingEntries, conflicts, pathConflicts, relativeFilePaths);
+		return new PreparedModImport(stagingRoot, displayName, normalizedName, incomingEntries, modsRoot, fullPackage && !incomingEntries.isEmpty());
 	}
 
 	public String commitPreparedModImport(PreparedModImport preparedImport, boolean replaceExistingConflicts) throws Exception {
@@ -798,25 +824,22 @@ public final class ExtraSettingsRepository {
 	}
 
 	public String commitPreparedModImport(PreparedModImport preparedImport, boolean replaceExistingConflicts, boolean allowPathConflicts) throws Exception {
-		if (preparedImport == null || preparedImport.stagingRoot == null || !preparedImport.stagingRoot.isDirectory()) {
-			throw new IOException("Prepared MOD import is no longer available.");
-		}
 		try {
+			requirePreparedModImport(preparedImport);
 			List<ModImportConflict> idConflicts = replaceExistingConflicts ? findCurrentImportConflicts(preparedImport) : Collections.emptyList();
-			List<ModImportPathConflict> pathConflicts = findCurrentImportPathConflicts(preparedImport, idConflicts);
-			if (!allowPathConflicts && !pathConflicts.isEmpty()) {
-				throw new ModImportPathConflictException(pathConflicts);
+			ModInstallStore store = new ModInstallStore(context.getFilesDir(), preparedImport.modsRoot);
+			try (ModInstallStore.Transaction transaction = store.beginInstall(preparedImport.stagingRoot, "",
+				toInstallModules(preparedImport.stagingRoot, preparedImport.incomingEntries, ""),
+				toInstallModules(preparedImport.modsRoot, conflictEntries(idConflicts), ""),
+				preparedImport.isReplaceTrackedFiles(), allowPathConflicts, false)) {
+				JSONObject settings = loadSettingsJson();
+				ensureModSettings(settings).put("mods_enabled", true);
+				saveSettingsJson(settings);
+				transaction.commit();
+				preparedImport.fileNotice = formatInstallNotice(transaction.preservedPaths, transaction.untrackedModIds);
+			} catch (ModInstallStore.OverwriteException exception) {
+				throw new ModImportPathConflictException(toPathConflicts(exception.paths));
 			}
-			if (replaceExistingConflicts) {
-				deleteExistingImportConflicts(idConflicts);
-			}
-			File modsRoot = getModsRootDir();
-			ensureDirectory(modsRoot);
-			copyDirectoryContents(preparedImport.stagingRoot, modsRoot);
-			normalizeRuntimeModAliases(modsRoot);
-			JSONObject settings = loadSettingsJson();
-			ensureModSettings(settings).put("mods_enabled", true);
-			saveSettingsJson(settings);
 			return preparedImport.normalizedName;
 		} finally {
 			discardPreparedModImport(preparedImport);
@@ -828,65 +851,28 @@ public final class ExtraSettingsRepository {
 	}
 
 	public WorkshopModImportResult commitPreparedWorkshopModImport(PreparedModImport preparedImport, String rawGroupName, String publishedFileId, String workshopBranch, boolean replaceExistingConflicts) throws Exception {
-		if (preparedImport == null || preparedImport.stagingRoot == null || !preparedImport.stagingRoot.isDirectory()) {
-			throw new IOException("Prepared MOD import is no longer available.");
-		}
-		File stagingInstallRoot = null;
-		File backupInstallRoot = null;
-		File installRoot = null;
-		boolean handedOff = false;
+		ModInstallStore.Transaction transaction = null;
 		try {
+			requirePreparedModImport(preparedImport);
+			File installRoot = getWorkshopItemInstallDir(rawGroupName, publishedFileId, workshopBranch);
+			String prefix = requireModRelativePath(preparedImport.modsRoot, installRoot);
 			List<ModImportConflict> idConflicts = replaceExistingConflicts ? findCurrentWorkshopImportConflicts(preparedImport, rawGroupName, publishedFileId, workshopBranch) : Collections.emptyList();
-			if (replaceExistingConflicts) {
-				deleteExistingImportConflicts(idConflicts);
-			}
-			installRoot = getWorkshopItemInstallDir(rawGroupName, publishedFileId, workshopBranch);
-			File branchDirectory = installRoot.getParentFile();
-			if (branchDirectory != null) {
-				ensureDirectory(branchDirectory);
-			}
-			File groupDirectory = getWorkshopGroupDir(rawGroupName);
-			if (groupDirectory != null) {
-				ensureDirectory(groupDirectory);
-			}
-			File parent = installRoot.getParentFile();
-			if (parent == null) {
-				throw new IOException("Workshop install directory has no parent: " + installRoot);
-			}
-			String safeName = installRoot.getName();
-			stagingInstallRoot = new File(parent, "." + safeName + ".incoming-" + UUID.randomUUID());
-			backupInstallRoot = new File(parent, "." + safeName + ".backup-" + UUID.randomUUID());
-			ensureDirectory(stagingInstallRoot);
-			copyDirectoryContents(preparedImport.stagingRoot, stagingInstallRoot);
-			normalizeRuntimeModAliases(stagingInstallRoot);
-			if (installRoot.exists() || isSymbolicLink(installRoot)) {
-				if (!installRoot.renameTo(backupInstallRoot)) {
-					throw new IOException("Unable to stage existing Workshop install: " + installRoot);
-				}
-			}
-			if (!stagingInstallRoot.renameTo(installRoot)) {
-				if (backupInstallRoot.exists()) {
-					backupInstallRoot.renameTo(installRoot);
-				}
-				throw new IOException("Unable to publish Workshop install: " + installRoot);
-			}
+			transaction = new ModInstallStore(context.getFilesDir(), preparedImport.modsRoot).beginInstall(
+				preparedImport.stagingRoot, prefix,
+				toInstallModules(preparedImport.stagingRoot, preparedImport.incomingEntries, prefix),
+				toInstallModules(preparedImport.modsRoot, conflictEntries(idConflicts), ""), true, false, true);
 			JSONObject settings = loadSettingsJson();
 			ensureModSettings(settings).put("mods_enabled", true);
 			saveSettingsJson(settings);
 			List<ModEntry> installedEntries = listInstalledModManifestsUnder(installRoot);
-			WorkshopModImportResult result = new WorkshopModImportResult(installRoot, installedEntries, preparedImport.normalizedName, backupInstallRoot.exists() ? backupInstallRoot : null);
-			handedOff = true;
-			return result;
+			preparedImport.fileNotice = formatInstallNotice(transaction.preservedPaths, transaction.untrackedModIds);
+			return new WorkshopModImportResult(installRoot, installedEntries, preparedImport.normalizedName, transaction, preparedImport.fileNotice);
 		} catch (Exception exception) {
-			if (!handedOff) {
-				if (installRoot != null && installRoot.exists() && backupInstallRoot != null && backupInstallRoot.exists()) {
-					deleteRecursively(installRoot);
-				}
-				if (installRoot != null && !installRoot.exists() && backupInstallRoot != null && backupInstallRoot.exists()) {
-					backupInstallRoot.renameTo(installRoot);
-				}
-				if (stagingInstallRoot != null && stagingInstallRoot.exists()) {
-					deleteRecursively(stagingInstallRoot);
+			if (transaction != null) {
+				try {
+					transaction.close();
+				} catch (IOException rollbackException) {
+					exception.addSuppressed(rollbackException);
 				}
 			}
 			throw exception;
@@ -895,26 +881,17 @@ public final class ExtraSettingsRepository {
 		}
 	}
 
-	public void finalizeWorkshopModImport(WorkshopModImportResult result) {
-		if (result == null || result.backupRoot == null || !result.backupRoot.exists()) {
-			return;
-		}
-		try {
-			deleteRecursively(result.backupRoot);
-		} catch (RuntimeException ignored) {
-			// The published install and index remain usable; startup recovery will retry cleanup.
+	public void finalizeWorkshopModImport(WorkshopModImportResult result) throws IOException {
+		if (result != null) {
+			try (ModInstallStore.Transaction transaction = result.transaction) {
+				transaction.commit();
+			}
 		}
 	}
 
-	public void rollbackWorkshopModImport(WorkshopModImportResult result) {
-		if (result == null || result.installRoot == null) {
-			return;
-		}
-		if (result.installRoot.exists() && result.backupRoot != null && result.backupRoot.exists()) {
-			deleteRecursively(result.installRoot);
-		}
-		if (!result.installRoot.exists() && result.backupRoot != null && result.backupRoot.exists()) {
-			result.backupRoot.renameTo(result.installRoot);
+	public void rollbackWorkshopModImport(WorkshopModImportResult result) throws IOException {
+		if (result != null) {
+			result.transaction.close();
 		}
 	}
 
@@ -923,6 +900,97 @@ public final class ExtraSettingsRepository {
 			deleteRecursively(preparedImport.stagingRoot);
 		}
 	}
+
+	private void recoverModInstallTransactions(File modsRoot) {
+		try {
+			new ModInstallStore(context.getFilesDir(), modsRoot).recover();
+		} catch (IOException exception) {
+			throw new IllegalStateException("Unable to recover MOD installation; files have not been accepted for launch.", exception);
+		}
+	}
+
+	private void requirePreparedModImport(PreparedModImport preparedImport) throws IOException {
+		if (preparedImport == null || preparedImport.stagingRoot == null || !preparedImport.stagingRoot.isDirectory()) {
+			throw new IOException("Prepared MOD import is no longer available.");
+		}
+		if (!getModsRootDir().getCanonicalFile().equals(preparedImport.modsRoot.getCanonicalFile())) {
+			throw new IOException("The selected MOD directory changed. Import the MOD again in the intended launch profile.");
+		}
+	}
+
+	private String requireModRelativePath(File root, File file) throws IOException {
+		String rootPath = root.getAbsoluteFile().getPath();
+		String filePath = file.getAbsoluteFile().getPath();
+		if (!filePath.startsWith(rootPath + File.separator)) {
+			throw new IOException("MOD path is outside its installation directory: " + file);
+		}
+		return filePath.substring(rootPath.length() + 1).replace(File.separatorChar, '/');
+	}
+
+	private List<ModInstallStore.Module> toInstallModules(File sourceRoot, List<ModEntry> entries, String prefix) throws IOException {
+		List<ModInstallStore.Module> modules = new ArrayList<>();
+		String pathPrefix = prefix.isEmpty() ? "" : prefix + "/";
+		for (ModEntry entry : entries) {
+			if (!isSafeModBaseName(entry.modId) || !isSafeModBaseName(entry.pckName)) {
+				throw new IOException("Invalid MOD file name.");
+			}
+			Set<String> paths = new LinkedHashSet<>();
+			paths.add(pathPrefix + requireModRelativePath(sourceRoot, entry.manifestFile));
+			File parent = entry.manifestFile.getParentFile();
+			for (String name : new String[] {entry.modId + ".json", entry.modId + ".dll", entry.modId + ".pck", entry.pckName + ".dll", entry.pckName + ".pck"}) {
+				paths.add(pathPrefix + requireModRelativePath(sourceRoot, requireModSibling(parent, name)));
+			}
+			modules.add(new ModInstallStore.Module(entry.modId, pathPrefix + requireModRelativePath(sourceRoot, entry.manifestFile), entry.version, paths));
+		}
+		return modules;
+	}
+
+	private List<ModEntry> conflictEntries(List<ModImportConflict> conflicts) {
+		List<ModEntry> entries = new ArrayList<>();
+		Set<String> seen = new LinkedHashSet<>();
+		for (ModImportConflict conflict : conflicts) {
+			for (ModEntry entry : conflict.existingEntries) {
+				if (seen.add(entry.manifestFile.getAbsolutePath())) {
+					entries.add(entry);
+				}
+			}
+		}
+		return entries;
+	}
+
+	private List<ModImportPathConflict> toPathConflicts(List<String> paths) {
+		if (paths.isEmpty()) {
+			return Collections.emptyList();
+		}
+		File modsRoot = getModsRootDir();
+		Map<String, String> ownerLabels = new LinkedHashMap<>();
+		for (ModEntry entry : listInstalledModManifests()) {
+			File parent = entry.manifestFile.getParentFile();
+			String label = entry.displayName + " (" + entry.modId + ")";
+			for (String name : new String[] {entry.manifestFile.getName(), entry.modId + ".json", entry.modId + ".dll", entry.modId + ".pck", entry.pckName + ".dll", entry.pckName + ".pck"}) {
+				ownerLabels.putIfAbsent(getRelativePath(modsRoot, new File(parent, name)), label);
+			}
+		}
+		List<ModImportPathConflict> conflicts = new ArrayList<>();
+		for (String path : paths) {
+			int slash = path.lastIndexOf('/');
+			String fallback = slash < 0 ? "" : path.substring(0, slash);
+			conflicts.add(new ModImportPathConflict(path, ownerLabels.getOrDefault(path, fallback)));
+		}
+		return conflicts;
+	}
+
+	private String formatInstallNotice(List<String> preservedPaths, List<String> untrackedModIds) {
+		List<String> notices = new ArrayList<>();
+		if (!untrackedModIds.isEmpty()) {
+			notices.add(context.getString(R.string.mod_import_legacy_notice, TextUtils.join(", ", untrackedModIds)));
+		}
+		if (!preservedPaths.isEmpty()) {
+			notices.add(context.getString(R.string.mod_import_preserved_notice, TextUtils.join("\n", preservedPaths)));
+		}
+		return TextUtils.join("\n\n", notices);
+	}
+
 
 	public List<ModImportConflict> findCurrentImportConflicts(PreparedModImport preparedImport) {
 		if (preparedImport == null) {
@@ -959,25 +1027,13 @@ public final class ExtraSettingsRepository {
 		return filtered;
 	}
 
-	public List<ModImportPathConflict> findCurrentImportPathConflicts(PreparedModImport preparedImport, List<ModImportConflict> confirmedIdConflicts) {
+	public List<ModImportPathConflict> findCurrentImportPathConflicts(PreparedModImport preparedImport, List<ModImportConflict> confirmedIdConflicts) throws IOException {
 		if (preparedImport == null || preparedImport.stagingRoot == null || !preparedImport.stagingRoot.isDirectory()) {
 			return Collections.emptyList();
 		}
 		return findImportPathConflicts(preparedImport, confirmedIdConflicts);
 	}
 
-	public List<ModImportPathConflict> findCurrentImportPathConflicts(PreparedModImport preparedImport, List<ModImportConflict> confirmedIdConflicts, String rawTargetGroupName) {
-		if (preparedImport == null || preparedImport.stagingRoot == null || !preparedImport.stagingRoot.isDirectory()) {
-			return Collections.emptyList();
-		}
-		File modsRoot = getModsRootDir();
-		List<ModImportPathConflict> conflicts = findImportPathConflicts(preparedImport, confirmedIdConflicts, modsRoot, "");
-		String groupName = sanitizeFileName(normalizeModGroupName(rawTargetGroupName));
-		if (!TextUtils.isEmpty(groupName)) {
-			conflicts.addAll(findImportPathConflicts(preparedImport, confirmedIdConflicts, new File(modsRoot, groupName), groupName + "/"));
-		}
-		return conflicts;
-	}
 
 	private List<ModImportConflict> findImportConflicts(List<ModEntry> incomingEntries) {
 		if (incomingEntries == null || incomingEntries.isEmpty()) {
@@ -999,98 +1055,15 @@ public final class ExtraSettingsRepository {
 		return conflicts;
 	}
 
-	private List<ModImportPathConflict> findImportPathConflicts(PreparedModImport preparedImport, List<ModImportConflict> confirmedIdConflicts) {
-		return findImportPathConflicts(preparedImport, confirmedIdConflicts, getModsRootDir(), "");
+	private List<ModImportPathConflict> findImportPathConflicts(PreparedModImport preparedImport, List<ModImportConflict> confirmedIdConflicts) throws IOException {
+		requirePreparedModImport(preparedImport);
+		ModInstallStore.Review review = new ModInstallStore(context.getFilesDir(), preparedImport.modsRoot).review(
+			preparedImport.stagingRoot, "", toInstallModules(preparedImport.stagingRoot, preparedImport.incomingEntries, ""),
+			toInstallModules(preparedImport.modsRoot, conflictEntries(confirmedIdConflicts), ""), preparedImport.isReplaceTrackedFiles(), false);
+		return toPathConflicts(review.conflictPaths);
 	}
 
-	private List<ModImportPathConflict> findImportPathConflicts(PreparedModImport preparedImport, List<ModImportConflict> confirmedIdConflicts, File targetRoot, String displayPrefix) {
-		try {
-			ensureDirectory(targetRoot);
-		} catch (RuntimeException ignored) {
-		}
-		Set<String> ignoredExistingPaths = collectConfirmedConflictPaths(confirmedIdConflicts);
-		List<ModImportPathConflict> conflicts = new ArrayList<>();
-		Set<String> seenTargets = new LinkedHashSet<>();
-		for (String relativePath : getPreparedImportRelativeFilePaths(preparedImport)) {
-			if (TextUtils.isEmpty(relativePath)) {
-				continue;
-			}
-			File targetFile = resolveRelativeChild(targetRoot, relativePath);
-			if (targetFile == null) {
-				continue;
-			}
-			if (!targetFile.isFile()) {
-				continue;
-			}
-			String canonicalTarget = safeCanonicalPath(targetFile);
-			if (ignoredExistingPaths.contains(canonicalTarget) || !seenTargets.add(canonicalTarget)) {
-				continue;
-			}
-			conflicts.add(new ModImportPathConflict(displayPrefix + relativePath, describeModFileOwner(targetFile)));
-		}
-		return conflicts;
-	}
 
-	private List<String> collectRelativeFilePaths(File root) {
-		List<File> files = new ArrayList<>();
-		collectRegularFiles(root, files);
-		List<String> paths = new ArrayList<>();
-		for (File file : files) {
-			String relativePath = getRelativePath(root, file);
-			if (!TextUtils.isEmpty(relativePath) && !paths.contains(relativePath)) {
-				paths.add(relativePath);
-			}
-		}
-		paths.sort(String::compareToIgnoreCase);
-		return paths;
-	}
-
-	private List<String> getPreparedImportRelativeFilePaths(PreparedModImport preparedImport) {
-		if (preparedImport == null) {
-			return new ArrayList<>();
-		}
-		if (preparedImport.relativeFilePaths != null && !preparedImport.relativeFilePaths.isEmpty()) {
-			return new ArrayList<>(preparedImport.relativeFilePaths);
-		}
-		return collectRelativeFilePaths(preparedImport.stagingRoot);
-	}
-
-	private Set<String> collectConfirmedConflictPaths(List<ModImportConflict> confirmedIdConflicts) {
-		if (confirmedIdConflicts == null || confirmedIdConflicts.isEmpty()) {
-			return Collections.emptySet();
-		}
-		Set<String> paths = new LinkedHashSet<>();
-		for (ModImportConflict conflict : confirmedIdConflicts) {
-			for (ModEntry existingEntry : conflict.existingEntries) {
-				collectModEntryFiles(existingEntry, paths);
-			}
-		}
-		return paths;
-	}
-
-	private void collectModEntryFiles(ModEntry modEntry, Set<String> targetPaths) {
-		if (modEntry == null || targetPaths == null) {
-			return;
-		}
-		addCanonicalIfFile(targetPaths, modEntry.manifestFile);
-		File parent = modEntry.manifestFile.getParentFile();
-		if (parent == null) {
-			return;
-		}
-		addCanonicalIfFile(targetPaths, new File(parent, modEntry.modId + ".json"));
-		addCanonicalIfFile(targetPaths, new File(parent, modEntry.modId + ".pck"));
-		addCanonicalIfFile(targetPaths, new File(parent, modEntry.modId + ".dll"));
-		if (!modEntry.modId.equals(modEntry.pckName)) {
-			addCanonicalIfFile(targetPaths, new File(parent, modEntry.pckName + ".pck"));
-			addCanonicalIfFile(targetPaths, new File(parent, modEntry.pckName + ".dll"));
-		}
-	}
-
-	private void addCanonicalIfFile(Set<String> paths, File file) {
-		if (file != null && file.isFile()) {
-			paths.add(safeCanonicalPath(file));
-		}
-	}
 
 	private void collectRegularFiles(File root, List<File> files) {
 		if (root == null || !root.exists() || isSymbolicLink(root)) {
@@ -1110,61 +1083,9 @@ public final class ExtraSettingsRepository {
 		}
 	}
 
-	private String describeModFileOwner(File targetFile) {
-		File parent = targetFile == null ? null : targetFile.getParentFile();
-		if (parent == null) {
-			return "";
-		}
-		List<ModEntry> entries = new ArrayList<>();
-		collectManifestFiles(getModsRootDir(), parent, entries);
-		String targetName = targetFile.getName();
-		for (ModEntry entry : entries) {
-			if (isKnownModEntryFile(entry, targetFile)) {
-				return entry.displayName + " (" + entry.modId + ")";
-			}
-		}
-		return getRelativePath(getModsRootDir(), parent);
-	}
 
-	private boolean isKnownModEntryFile(ModEntry entry, File targetFile) {
-		if (entry == null || targetFile == null) {
-			return false;
-		}
-		File parent = entry.manifestFile.getParentFile();
-		if (parent == null || !safeCanonicalPath(parent).equals(safeCanonicalPath(targetFile.getParentFile()))) {
-			return false;
-		}
-		String fileName = targetFile.getName();
-		return fileName.equals(entry.manifestFile.getName())
-			|| fileName.equals(entry.modId + ".json")
-			|| fileName.equals(entry.modId + ".pck")
-			|| fileName.equals(entry.modId + ".dll")
-			|| fileName.equals(entry.pckName + ".pck")
-			|| fileName.equals(entry.pckName + ".dll");
-	}
 
-	private String safeCanonicalPath(File file) {
-		try {
-			return file.getCanonicalPath();
-		} catch (IOException ignored) {
-			return file.getAbsolutePath();
-		}
-	}
 
-	private void deleteExistingImportConflicts(List<ModImportConflict> conflicts) throws Exception {
-		if (conflicts == null || conflicts.isEmpty()) {
-			return;
-		}
-		Set<String> deletedManifestPaths = new LinkedHashSet<>();
-		for (ModImportConflict conflict : conflicts) {
-			for (ModEntry existingEntry : conflict.existingEntries) {
-				String canonicalPath = existingEntry.manifestFile.getCanonicalPath();
-				if (deletedManifestPaths.add(canonicalPath)) {
-					deleteMod(existingEntry);
-				}
-			}
-		}
-	}
 
 	private void validateModImportPaths(File stagingRoot) throws IOException {
 		List<File> files = new ArrayList<>();
@@ -1290,34 +1211,34 @@ public final class ExtraSettingsRepository {
 		copyRecursively(source, target);
 	}
 
-	public void deleteMod(ModEntry modEntry) throws Exception {
-		File manifestFile = modEntry.manifestFile;
-		File parent = manifestFile.getParentFile();
-		if (!isSafeModBaseName(modEntry.modId) || !isSafeModBaseName(modEntry.pckName)) {
-			throw new IOException("Invalid MOD file name.");
-		}
-		deleteIfExists(requireModSibling(parent, manifestFile.getName()));
-		if (parent != null) {
-			deleteIfExists(requireModSibling(parent, modEntry.modId + ".json"));
-			deleteIfExists(requireModSibling(parent, modEntry.modId + ".pck"));
-			deleteIfExists(requireModSibling(parent, modEntry.modId + ".dll"));
-			if (!modEntry.modId.equals(modEntry.pckName)) {
-				deleteIfExists(requireModSibling(parent, modEntry.pckName + ".pck"));
-				deleteIfExists(requireModSibling(parent, modEntry.pckName + ".dll"));
-			}
-			pruneEmptyDirectories(parent, getModsRootDir());
-		}
-		removeModGroupAssignment(modEntry.modId);
-		JSONObject settings = loadSettingsJson();
-		removeModEntry(settings, modEntry.modId);
-		removeModEntry(settings, modEntry.pckName);
-		saveSettingsJson(settings);
+	public String deleteMod(ModEntry modEntry) throws Exception {
+		return deleteMods(Collections.singletonList(modEntry));
 	}
 
-	public void deleteMods(List<ModEntry> modEntries) throws Exception {
-		for (ModEntry modEntry : modEntries) {
-			deleteMod(modEntry);
+	public String deleteMods(List<ModEntry> modEntries) throws Exception {
+		File modsRoot = getModsRootDir().getAbsoluteFile();
+		String notice;
+		try (ModInstallStore.Transaction transaction = new ModInstallStore(context.getFilesDir(), modsRoot)
+			.beginRemoval(toInstallModules(modsRoot, modEntries, ""), "")) {
+			transaction.commit();
+			notice = formatInstallNotice(Collections.emptyList(), transaction.untrackedModIds);
+			if (transaction.preservedDirectory != null) {
+				String preserved = context.getString(R.string.mod_remove_preserved_notice, transaction.preservedDirectory.getAbsolutePath());
+				notice = notice.isEmpty() ? preserved : notice + "\n\n" + preserved;
+			}
 		}
+		removeDeletedModSettings(modEntries);
+		return notice;
+	}
+
+	private void removeDeletedModSettings(List<ModEntry> entries) throws Exception {
+		JSONObject settings = loadSettingsJson();
+		for (ModEntry entry : entries) {
+			removeModGroupAssignment(entry.modId);
+			removeModEntry(settings, entry.modId);
+			removeModEntry(settings, entry.pckName);
+		}
+		saveSettingsJson(settings);
 	}
 
 	public List<ModEntry> listInstalledModManifestsUnder(File directory) {
@@ -1352,22 +1273,17 @@ public final class ExtraSettingsRepository {
 
 	public void deleteWorkshopItemInstall(String installedRootPath, String publishedFileId, List<ModEntry> modEntries) throws Exception {
 		File installRoot = firstInstalledRootPath(installedRootPath);
-		File modsRoot = getModsRootDir();
-		if (installRoot != null
-			&& installRoot.getName().equals(sanitizeWorkshopPublishedFileId(publishedFileId))
-			&& isSameOrDescendant(installRoot, modsRoot)
-			&& !installRoot.getCanonicalFile().equals(modsRoot.getCanonicalFile())) {
-			deleteRecursively(installRoot);
+		File modsRoot = getModsRootDir().getAbsoluteFile();
+		if (installRoot == null || !installRoot.getName().equals(sanitizeWorkshopPublishedFileId(publishedFileId))) {
+			throw new IOException("Invalid Workshop installation directory.");
 		}
-		JSONObject settings = loadSettingsJson();
-		if (modEntries != null) {
-			for (ModEntry modEntry : modEntries) {
-				removeModGroupAssignment(modEntry.modId);
-				removeModEntry(settings, modEntry.modId);
-				removeModEntry(settings, modEntry.pckName);
-			}
+		String directory = requireModRelativePath(modsRoot, installRoot);
+		List<ModEntry> entries = modEntries == null ? Collections.emptyList() : modEntries;
+		try (ModInstallStore.Transaction transaction = new ModInstallStore(context.getFilesDir(), modsRoot)
+			.beginRemoval(toInstallModules(modsRoot, entries, ""), directory)) {
+			transaction.commit();
 		}
-		saveSettingsJson(settings);
+		removeDeletedModSettings(entries);
 	}
 
 	public List<String> listModGroups() {
@@ -2702,6 +2618,14 @@ public final class ExtraSettingsRepository {
 		outputStream.closeEntry();
 	}
 
+	private void extractArchiveFile(File sourceFile, File targetDirectory) throws Exception {
+		ArchiveFormatDetector.Format format = ArchiveFormatDetector.detect(sourceFile);
+		if (format == ArchiveFormatDetector.Format.UNKNOWN) {
+			throw new ArchiveExtractor.UnsupportedArchiveException("Unsupported or unrecognized archive format.");
+		}
+		ArchiveExtractor.extract(sourceFile, targetDirectory, null, null);
+	}
+
 	private void unzipIntoDirectory(Uri uri, File targetDirectory) throws Exception {
 		ensureDirectory(targetDirectory);
 		try (InputStream rawStream = context.getContentResolver().openInputStream(uri);
@@ -2895,12 +2819,12 @@ public final class ExtraSettingsRepository {
 		}
 	}
 
-	private File findSingleImportZip(File sourceDirectory) {
+	private File findSingleImportArchive(File sourceDirectory) throws IOException {
 		File[] children = sourceDirectory == null ? null : sourceDirectory.listFiles(file -> !isWorkshopDownloadSupportFile(file));
 		if (children == null || children.length != 1 || !children[0].isFile()) {
 			return null;
 		}
-		return isZipFile(children[0]) ? children[0] : null;
+		return ArchiveExtractor.isArchive(children[0]) ? children[0] : null;
 	}
 
 	private boolean isWorkshopDownloadSupportFile(File file) {
@@ -3041,20 +2965,6 @@ public final class ExtraSettingsRepository {
 		}
 	}
 
-	private void pruneEmptyDirectories(File directory, File stopDirectory) {
-		File current = directory;
-		while (current != null && !current.equals(stopDirectory)) {
-			String[] children = current.list();
-			if (children != null && children.length == 0) {
-				if (!current.delete()) {
-					break;
-				}
-				current = current.getParentFile();
-				continue;
-			}
-			break;
-		}
-	}
 
 	public void ensureDirectory(File directory) {
 		if (directory.isDirectory()) {
@@ -3113,22 +3023,6 @@ public final class ExtraSettingsRepository {
 		return file.getName();
 	}
 
-	private File resolveRelativeChild(File root, String relativePath) {
-		if (root == null || TextUtils.isEmpty(relativePath)) {
-			return null;
-		}
-		try {
-			File rootCanonical = root.getCanonicalFile();
-			File child = new File(rootCanonical, relativePath.replace('/', File.separatorChar)).getCanonicalFile();
-			String rootPath = rootCanonical.getAbsolutePath();
-			String childPath = child.getAbsolutePath();
-			if (childPath.equals(rootPath) || childPath.startsWith(rootPath + File.separator)) {
-				return child;
-			}
-		} catch (IOException ignored) {
-		}
-		return null;
-	}
 
 	private long directorySize(File file) {
 		return DirectoryStatsCalculator.calculate(file).totalBytes;
@@ -3247,15 +3141,17 @@ public final class ExtraSettingsRepository {
 
 	public static final class WorkshopModImportResult {
 		public final File installRoot;
-		public final File backupRoot;
 		public final List<ModEntry> installedEntries;
 		public final String importedName;
+		public final String fileNotice;
+		private final ModInstallStore.Transaction transaction;
 
-		WorkshopModImportResult(File installRoot, List<ModEntry> installedEntries, String importedName, File backupRoot) {
+		WorkshopModImportResult(File installRoot, List<ModEntry> installedEntries, String importedName, ModInstallStore.Transaction transaction, String fileNotice) {
 			this.installRoot = installRoot;
-			this.backupRoot = backupRoot;
+			this.transaction = transaction;
 			this.installedEntries = Collections.unmodifiableList(new ArrayList<>(installedEntries));
 			this.importedName = importedName == null ? "" : importedName;
+			this.fileNotice = fileNotice;
 		}
 	}
 
@@ -3264,18 +3160,31 @@ public final class ExtraSettingsRepository {
 		public final String displayName;
 		public final String normalizedName;
 		public final List<ModEntry> incomingEntries;
-		public final List<ModImportConflict> conflicts;
-		public final List<ModImportPathConflict> pathConflicts;
-		public final List<String> relativeFilePaths;
+		public final boolean fullPackage;
+		private final File modsRoot;
+		private boolean replaceTrackedFiles;
+		private String fileNotice = "";
 
-		PreparedModImport(File stagingRoot, String displayName, String normalizedName, List<ModEntry> incomingEntries, List<ModImportConflict> conflicts, List<ModImportPathConflict> pathConflicts, List<String> relativeFilePaths) {
+		PreparedModImport(File stagingRoot, String displayName, String normalizedName, List<ModEntry> incomingEntries, File modsRoot, boolean fullPackage) {
 			this.stagingRoot = stagingRoot;
 			this.displayName = displayName == null ? normalizedName : displayName;
 			this.normalizedName = normalizedName;
 			this.incomingEntries = Collections.unmodifiableList(new ArrayList<>(incomingEntries));
-			this.conflicts = Collections.unmodifiableList(new ArrayList<>(conflicts));
-			this.pathConflicts = Collections.unmodifiableList(new ArrayList<>(pathConflicts));
-			this.relativeFilePaths = Collections.unmodifiableList(new ArrayList<>(relativeFilePaths));
+			this.modsRoot = modsRoot;
+			this.fullPackage = fullPackage;
+			this.replaceTrackedFiles = fullPackage;
+		}
+
+		public boolean isReplaceTrackedFiles() {
+			return replaceTrackedFiles;
+		}
+
+		public void setReplaceTrackedFiles(boolean replaceTrackedFiles) {
+			this.replaceTrackedFiles = fullPackage && replaceTrackedFiles;
+		}
+
+		public String getFileNotice() {
+			return fileNotice;
 		}
 	}
 

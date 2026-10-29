@@ -143,6 +143,11 @@ public class SteamWorkshopActivity extends AppCompatActivity {
 	private String observedSteamAccountKey = "";
 	private final ArrayList<PendingDownload> pendingDownloadQueue = new ArrayList<>();
 	private final ArrayDeque<PendingImport> pendingImportQueue = new ArrayDeque<>();
+	private static final ExecutorService MOD_IMPORT_EXECUTOR = Executors.newSingleThreadExecutor(runnable -> new Thread(runnable, "sts2-workshop-mod-import"));
+	private PendingImport activeImport;
+	private boolean importCommitRunning;
+	private androidx.appcompat.app.AlertDialog modImportDialog;
+	private SteamOperationProgressDialog modImportProgress;
 	private boolean busy;
 	private boolean importBusy;
 	private boolean loadingMoreResults;
@@ -261,6 +266,12 @@ public class SteamWorkshopActivity extends AppCompatActivity {
 	@Override
 	protected void onDestroy() {
 		destroyed = true;
+		for (DownloadTask task : downloadTasks.values()) task.cancel();
+		if (modImportDialog != null) modImportDialog.dismiss();
+		if (modImportProgress != null) modImportProgress.dismiss();
+		for (PendingImport pending : pendingImportQueue) discardWorkshopImport(pending.prepared);
+		pendingImportQueue.clear();
+		if (activeImport != null) discardWorkshopImport(activeImport.prepared);
 		listGeneration++;
 		libraryGeneration.incrementAndGet();
 		libraryExecutor.shutdownNow();
@@ -2436,7 +2447,11 @@ public class SteamWorkshopActivity extends AppCompatActivity {
 				}, task.cancellationToken);
 				ExtraSettingsRepository.PreparedModImport prepared = repository.prepareDownloadedModDirectory(result.getOutputDir(), item.getTitle());
 				SteamWorkshopDownloader.Result finalResult = result;
-				runOnUiThreadIfActive(() -> {
+				runOnUiThread(() -> {
+					if (isUiUnavailable() || task.cancelled) {
+						discardWorkshopImport(prepared);
+						return;
+					}
 					task.markImporting(getString(R.string.workshop_importing_status));
 					updateDownloadProgressBindings(task.publishedFileId);
 					enqueuePreparedWorkshopImport(finalResult, prepared, updateExisting);
@@ -2690,7 +2705,18 @@ public class SteamWorkshopActivity extends AppCompatActivity {
 		task.cancel();
 		downloadTasks.remove(publishedFileId);
 		pendingDownloadQueue.removeIf(item -> item != null && item.item != null && publishedFileId.equals(item.item.getPublishedFileId()));
-		pendingImportQueue.removeIf(pending -> pending != null && publishedFileId.equals(pending.result.getItem().getPublishedFileId()));
+		pendingImportQueue.removeIf(pending -> {
+			if (pending != null && publishedFileId.equals(pending.result.getItem().getPublishedFileId())) {
+				discardWorkshopImport(pending.prepared);
+				return true;
+			}
+			return false;
+		});
+		if (activeImport != null && publishedFileId.equals(activeImport.result.getItem().getPublishedFileId()) && !importCommitRunning) {
+			if (modImportDialog != null) modImportDialog.dismiss();
+			discardWorkshopImport(activeImport.prepared);
+			finishImportAndContinue();
+		}
 		markDownloadUiStructureChanged();
 		refreshDownloadUi();
 		showMessage(getString(R.string.workshop_download_cancelled));
@@ -2897,6 +2923,10 @@ public class SteamWorkshopActivity extends AppCompatActivity {
 		}, delay);
 	}
 
+	private void discardWorkshopImport(ExtraSettingsRepository.PreparedModImport prepared) {
+		MOD_IMPORT_EXECUTOR.execute(() -> repository.discardPreparedModImport(prepared));
+	}
+
 	private void enqueuePreparedWorkshopImport(SteamWorkshopDownloader.Result result, ExtraSettingsRepository.PreparedModImport prepared, boolean updateExisting) {
 		pendingImportQueue.addLast(new PendingImport(result, prepared, updateExisting));
 		startNextImport();
@@ -2910,10 +2940,14 @@ public class SteamWorkshopActivity extends AppCompatActivity {
 		if (next == null) {
 			return;
 		}
+		activeImport = next;
+		importBusy = true;
 		handlePreparedWorkshopImport(next.result, next.prepared, next.updateExisting);
 	}
 
 	private void finishImportAndContinue() {
+		activeImport = null;
+		importCommitRunning = false;
 		importBusy = false;
 		startNextImport();
 		pumpDownloadQueue();
@@ -2925,82 +2959,94 @@ public class SteamWorkshopActivity extends AppCompatActivity {
 			return;
 		}
 		String groupName = SteamWorkshopPreferences.getDownloadGroup(this);
-		String publishedFileId = result.getItem().getPublishedFileId();
-		String workshopBranch = result.getBranch();
-		List<ExtraSettingsRepository.ModImportConflict> idConflicts = repository.findCurrentWorkshopImportConflicts(prepared, groupName, publishedFileId, workshopBranch);
-		if (!idConflicts.isEmpty()) {
-			showModImportConflictDialog(prepared, idConflicts,
-				() -> {
-					repository.discardPreparedModImport(prepared);
+		MOD_IMPORT_EXECUTOR.execute(() -> {
+			try {
+				List<ExtraSettingsRepository.ModImportConflict> conflicts = repository.findCurrentWorkshopImportConflicts(prepared, groupName, result.getItem().getPublishedFileId(), result.getBranch());
+				runOnUiThreadIfActive(() -> {
+					if (activeImport == null || activeImport.prepared != prepared) return;
+					if (conflicts.isEmpty()) {
+						commitPreparedWorkshopImport(result, prepared, false);
+					} else {
+						Runnable cancel = () -> {
+							discardWorkshopImport(prepared);
+							finishDownloadTask(result.getItem().getPublishedFileId());
+							showMessage(getString(R.string.status_import_mod_cancelled));
+							finishImportAndContinue();
+						};
+						showModImportConflictDialog(prepared, conflicts, cancel,
+							() -> commitPreparedWorkshopImport(result, prepared, true), cancel);
+					}
+				});
+			} catch (Exception exception) {
+				repository.discardPreparedModImport(prepared);
+				runOnUiThreadIfActive(() -> {
+					if (activeImport == null || activeImport.prepared != prepared) return;
 					finishDownloadTask(result.getItem().getPublishedFileId());
-					showMessage(getString(R.string.status_import_mod_cancelled));
-					finishImportAndContinue();
-				},
-				() -> commitPreparedWorkshopImport(result, prepared, true),
-				() -> {
-					repository.discardPreparedModImport(prepared);
-					finishDownloadTask(result.getItem().getPublishedFileId());
-					showMessage(getString(R.string.status_import_mod_cancelled));
+					showError(exception);
 					finishImportAndContinue();
 				});
-			return;
-		}
-		commitPreparedWorkshopImport(result, prepared, false);
+			}
+		});
 	}
 
 	private void commitPreparedWorkshopImport(SteamWorkshopDownloader.Result result, ExtraSettingsRepository.PreparedModImport prepared, boolean replaceExistingConflicts) {
-		if (importBusy) {
-			return;
-		}
-		if (isUiUnavailable()) {
-			return;
-		}
+		if (importCommitRunning || isUiUnavailable()) return;
 		SteamOperationProgressDialog progressDialog = new SteamOperationProgressDialog(this, getString(R.string.workshop_import_progress_title), getString(R.string.status_busy_import_mod));
+		modImportProgress = progressDialog;
 		progressDialog.show();
-		importBusy = true;
+		importCommitRunning = true;
 		DownloadTask task = downloadTasks.get(result.getItem().getPublishedFileId());
 		if (task != null) {
 			task.markImporting(getString(R.string.workshop_importing_status));
 			updateDownloadProgressBindings(task.publishedFileId);
 		}
-		startWorkshopBackgroundThread("sts2-workshop-import", () -> {
+		MOD_IMPORT_EXECUTOR.execute(() -> {
 			ExtraSettingsRepository.WorkshopModImportResult importResult = null;
 			boolean finalized = false;
 			try {
-				importResult = repository.commitPreparedWorkshopModImport(
-					prepared,
-					SteamWorkshopPreferences.getDownloadGroup(this),
-					result.getItem().getPublishedFileId(),
-					result.getBranch(),
-					replaceExistingConflicts
-				);
+				if (destroyed || (task != null && task.cancelled)) throw new InterruptedException("Import cancelled");
+				importResult = repository.commitPreparedWorkshopModImport(prepared,
+					SteamWorkshopPreferences.getDownloadGroup(this), result.getItem().getPublishedFileId(),
+					result.getBranch(), replaceExistingConflicts);
+				if (destroyed || (task != null && task.cancelled)) throw new InterruptedException("Import cancelled");
+				library.recordInstall(result.getItem(), importResult.installRoot, importResult.installedEntries, SteamWorkshopLibrary.InstallContext.fromDownloadResult(result));
 				repository.finalizeWorkshopModImport(importResult);
 				finalized = true;
-				library.recordInstall(result.getItem(), importResult.installRoot, importResult.installedEntries, SteamWorkshopLibrary.InstallContext.fromDownloadResult(result));
 				SteamWorkshopDownloadCleaner.deleteImportedDownloadDirectory(this, result.getOutputDir());
 				String importedName = importResult.importedName;
+				String notice = importResult.fileNotice;
 				runOnUiThreadIfActive(() -> {
 					progressDialog.dismiss();
+					modImportProgress = null;
 					requestLibraryRefresh();
 					markWorkshopItemCurrent(result.getItem());
 					finishDownloadTask(result.getItem().getPublishedFileId());
 					showMessage(getString(R.string.workshop_import_done, importedName));
-					finishImportAndContinue();
+					if (!TextUtils.isEmpty(notice)) {
+						modImportDialog = new MaterialAlertDialogBuilder(this).setTitle(R.string.mod_import_file_notice_title)
+							.setMessage(notice).setPositiveButton(android.R.string.ok, null)
+							.setOnDismissListener(dialog -> { if (!isUiUnavailable()) finishImportAndContinue(); }).show();
+					}
+					else finishImportAndContinue();
 				});
 			} catch (Exception exception) {
 				if (importResult != null && !finalized) {
 					try {
 						repository.rollbackWorkshopModImport(importResult);
-					} catch (RuntimeException rollbackException) {
+					} catch (Exception rollbackException) {
 						exception.addSuppressed(rollbackException);
 					}
 				}
 				runOnUiThreadIfActive(() -> {
 					progressDialog.dismiss();
+					modImportProgress = null;
 					finishDownloadTask(result.getItem().getPublishedFileId());
-					showError(exception);
+					if (isCancelled(exception)) showMessage(getString(R.string.status_import_mod_cancelled));
+					else showError(exception);
 					finishImportAndContinue();
 				});
+			} finally {
+				repository.discardPreparedModImport(prepared);
 			}
 		});
 	}
@@ -3285,7 +3331,7 @@ public class SteamWorkshopActivity extends AppCompatActivity {
 		}
 		ScrollView scrollView = new ScrollView(this);
 		scrollView.addView(content, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-		new MaterialAlertDialogBuilder(this)
+		modImportDialog = new MaterialAlertDialogBuilder(this)
 			.setTitle(R.string.mod_import_conflict_title)
 			.setView(scrollView)
 			.setNegativeButton(R.string.mod_import_conflict_keep_original, (dialog, which) -> keepOriginal.run())
@@ -3741,7 +3787,7 @@ public class SteamWorkshopActivity extends AppCompatActivity {
 		boolean indeterminate = true;
 		boolean downloadStarted;
 		boolean importing;
-		boolean cancelled;
+		volatile boolean cancelled;
 
 		DownloadTask(SteamWorkshopCatalog.Item item) {
 			this.item = item;

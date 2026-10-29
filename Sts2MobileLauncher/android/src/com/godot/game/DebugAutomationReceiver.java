@@ -682,10 +682,12 @@ final class DebugAutomationRunner {
 			File file = resolveAutomationFile(path);
 			putEvent("mod_import_begin", file.getAbsolutePath());
 			String displayName = file.getName();
-			String normalizedName = repository.importDownloadedModFile(file, displayName);
+			ExtraSettingsRepository.PreparedModImport prepared = repository.prepareDownloadedModImport(file, displayName);
+			String normalizedName = repository.commitPreparedModImport(prepared, true, false);
 			JSONObject item = new JSONObject();
 			item.put("source", file.getAbsolutePath());
 			item.put("normalized_name", normalizedName);
+			item.put("file_notice", prepared.getFileNotice());
 			imported.put(item);
 		}
 		repository.saveSetting(settings -> repository.ensureModSettings(settings).put("mods_enabled", true));

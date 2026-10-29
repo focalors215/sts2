@@ -73,6 +73,7 @@ apply_build_info_patch() {
     "STS2AndroidPortCompat/Directory.Build.targets" \
     "STS2AndroidPortCompat/Android/AppPaths.cs" \
     "STS2AndroidPortCompat/Android/AndroidSettingsBridge.cs" \
+    "STS2AndroidPortCompat/Patches/BaseLibCompatPatches.cs" \
     "STS2AndroidPortCompat/Patches/EarlyLocalizationFallbackPatches.cs" \
     "STS2AndroidPortCompat/Patches/DeferredModPatchQueue.cs" \
     "STS2AndroidPortCompat/Patches/ModelDbInitPatch.cs" \
@@ -90,6 +91,7 @@ apply_build_info_patch() {
     "STS2AndroidPortCompat/Patches/MobileLayoutPatches.cs" \
     "STS2AndroidPortCompat/Patches/MerchantLayoutPatches.cs" \
     "STS2AndroidPortCompat/Patches/CombatAnimationWarmupPatches.cs" \
+    "STS2AndroidPortCompat/Patches/SpineWarmupPreview.cs" \
     "STS2AndroidPortCompat/Patches/LifecycleAndPerformancePatches.cs" \
     "STS2AndroidPortCompat/Patches/AndroidAudioLifecyclePatches.cs" \
     "STS2AndroidPortCompat/Patches/ShaderCompatibilityPatches.cs" \
@@ -104,6 +106,11 @@ apply_build_info_patch() {
     "STS2AndroidPortCompat/Patches/ExtendedMultiplayerRoomPatches.cs" \
     "STS2AndroidPortCompat/Patches/MobileTooltipPatches.cs" \
     "STS2AndroidPortCompat/Patches/IntentAnimationPatches.cs" \
+    "STS2AndroidPortCompat/Patches/MobileInputPolicy.cs" \
+    "STS2AndroidPortCompat/Patches/MobileInputPolicyPatches.cs" \
+    "STS2AndroidPortCompat/Patches/MobileTapPreviewPatches.cs" \
+    "STS2AndroidPortCompat/Patches/MobileSelectionConfirmationPatches.cs" \
+    "STS2AndroidPortCompat/Patches/MerchantSelectionConfirmationPatches.cs" \
     "STS2AndroidPortCompat/Patches/TouchInputPatches.cs" \
     "STS2AndroidPortCompat/Patches/AndroidInputCompatPatches.cs" \
     "STS2AndroidPortCompat/Patches/MobileReactionButtonPatches.cs" \

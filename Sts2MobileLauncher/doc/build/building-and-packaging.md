@@ -71,7 +71,7 @@ STS2_ORIGINAL_V1110_REFERENCE_DIR=/path/to/v0.111.0/bin/Debug
 - Gradle wrapper：`8.13`
 - Kotlin：`2.1.20`
 - Steam 子模块：`android/steam-protocol`、`android/steam-content`（Kotlin JVM + protobuf，用于 Steam 登录/SteamPipe 下载）
-- 主要依赖：JavaSteam `1.6.0`、OkHttp `5.3.2`、protobuf `4.31.1`、AndroidX Security Crypto、Android Prefab zstd、XZ；app module 启用 `desugar_jdk_libs 2.0.3` core-library desugaring，使 Steam 下载/云同步使用的 `java.time` 在 minSdk 24/25 可用。许可证速览、直接参考仓库与发布前合规检查见 `THIRD_PARTY_LICENSES.md`
+- 主要依赖：JavaSteam `1.6.0`、OkHttp `5.3.2`、protobuf `4.31.1`、AndroidX Security Crypto、Android Prefab zstd、XZ、`libarchive-android` `1.1.6`；app module 启用 `desugar_jdk_libs 2.0.3` core-library desugaring，使 Steam 下载/云同步使用的 `java.time` 在 minSdk 24/25 可用。许可证速览、直接参考仓库与发布前合规检查见 `THIRD_PARTY_LICENSES.md`
 - compileSdk/targetSdk：`35`
 - minSdk：`24`
 - buildTools：`35.0.0`
@@ -86,6 +86,10 @@ STS2_ORIGINAL_V1110_REFERENCE_DIR=/path/to/v0.111.0/bin/Debug
 
 `release` build type 当前保留 `debuggable true`，便于本地 sideload 和 `run-as` 验证。package 脚本默认使用 `RELEASE_KEYSTORE_*` 或 `local.properties` 中的签名配置；本地测试可使用 Android debug keystore，正式发布前必须重新配置签名和安全策略。
 
+本地 payload 与 MOD 导入现在保留 ZIP 的 Java 解包路径，并通过 `libarchive-android` 支持常见非 ZIP 归档（RAR/RAR5、7z、tar/压缩 tar、gzip、bzip2、xz、zstd、lz4、cab、cpio、ar、lha 等）。归档仍先进入现有 staging，再做路径/内容校验；非 ZIP 归档的加密条目、符号链接/硬链接、设备等特殊文件、超过 200,000 个条目、单文件 8 GiB 或总展开 16 GiB 的输入会 fail closed。只有非 ZIP 导入首次使用归档解析器时加载 native library，普通 ZIP/单文件 MOD 不增加运行时解压开销；CPU、内存和临时磁盘成本只发生在导入期间。
+
+当前 app 仅打包 `arm64-v8a`，`libarchive-android:1.1.6` AAR 本地缓存大小约 3.98 MB，其中 arm64 `libarchive-jni.so` 约 2.03 MB 未压缩；最终 APK 增量取决于 Gradle 对 native library 的打包/压缩方式。该增量换取导入格式支持，不会增加游戏运行时的解压路径。
+
 ## 4. 同步大型 runtime
 
 ```bash
@@ -99,7 +103,7 @@ tools/android/sync-runtime-from-references.sh
 - crypto native jar
 - FMOD 2.03.06 Android 三件套：`libfmod.so`、`libfmodstudio.so`、`libGodotFmod.android.template_release.arm64.so`。默认从 `STS2_FMOD_PLUGIN_AAR` 同级的 `arm64/` 读取，也可通过 `STS2_FMOD_ANDROID_LIBS_DIR` / `runtime.fmod_android_libs_dir` 指定；同步前核对已知 2.03.06 SHA，拒绝旧 2.02 和混用版本，然后覆盖参考 runtime 中 debug/release 两套 staged native 文件并移除未使用、依赖未打包 `libfmodL` 的 debug 桥。不能只升级两个 FMOD 引擎库而保留旧 Godot 桥。
 - FMOD AAR，并应用 `tools/android/fmod-shim/` 中的 Java shim；当前 2.03.06 native 使用 `getDevices`/设备名/类型 JNI 接口，仍保留旧 `getAudioDevices(int)` 接口。两条路径统一过滤 remote-submix，耳机/USB/蓝牙输出变化分别通知设备枚举与 AAudio 重连。`audio_compatibility_mode` 在 native 初始化前决定是否禁用 AAudio/低延迟路径；同步脚本替换全部生成的 `FMOD*.class` 并校验 AAR 内 `libs/fmod.jar`，缺少目标 jar 或 class 时直接终止构建。
-- Godot template AAR 的输入池修补：`tools/android/patch-godot-input-pool.py` 只修改 staged debug/release AAR，把 `GodotInputHandler` 对未处理的 mouse action（包括 `ACTION_BUTTON_PRESS/RELEASE`）的过滤提前到 `InputEventRunnable.obtain()` 之前，参考 AAR 不变；`tools/android/test-godot-input-pool.sh` 校验包装类不取得 pooled runnable 且支持事件仍委托给原始路径。
+- Godot template AAR 的输入池与有序来源修补：`tools/android/patch-godot-input-pool.py` 只修改 staged debug/release AAR，在 `InputEventRunnable.obtain()` 前过滤未处理 mouse action，并给原 pooled runnable 添加 source/epoch 旁带信息。使用 JDK 21 自带 ASM，保留原 JNI、池及回收路径；未知 ABI 拒绝构建，参考 AAR 不变。详见 §4.3。
 - Gradle wrapper jar
 
 这些产物位于 `android/assets/dotnet_bcl/`、`android/libs/` 等 gitignored 路径，不手工维护。长期源码化状态和剩余阻塞见 [`source-dependencies.md`](source-dependencies.md)。
@@ -174,11 +178,13 @@ tools/android/gradle-with-s2-env.sh testMonoReleaseUnitTest \
 
 验证边界：托管 harness 强制 helper 的 Mono 分支，在受控原生缓冲区验证 true/false/重复调用不改字节、缓存及异常释放锁，并在宿主运行时执行真实 Cecil 私有成员/跨生成程序集调用和 Harmony patch/unpatch。它不是 Android Mono 或玩家 MOD 组合的真机验证。`LD_PRELOAD` 仅为 Linux Harmony 验证环境要求，不打入 APK。本修复与默认关闭的内存总量实验独立，不修改 native Mono、GC/堆上限、Godot `StringName`、游戏 DLL 或用户 MOD。
 
-### 4.3 Godot Android 输入事件池修复
+### 4.3 Godot Android 输入事件池与有序来源修复
 
 Godot 4.5.1 的 `GodotInputHandler.handleMouseEvent` 会先调用 `InputEventRunnable.obtain()`，随后才过滤不转发的 `ACTION_BUTTON_PRESS` / `ACTION_BUTTON_RELEASE`。实体鼠标一次点击通常包含 DOWN、BUTTON_PRESS、BUTTON_RELEASE、UP；两个未处理事件会占用 1,200 个 pooled runnable 中的槽位而不归还，长时间使用后会出现 `Input event pool is at capacity`，触摸、鼠标和键盘输入都会停止。
 
-`sync-runtime-from-references.sh` 对 debug/release **staged** Godot template AAR 运行 `tools/android/patch-godot-input-pool.py`。修补器保留原始处理器作为内部 base，叠加一个只在 `obtain()` 前过滤未处理 action 的小包装类；支持的 mouse action 仍委托给原始实现，参考 runtime 不会被修改，也不改变 Android/游戏输入协议。AAR 缺少预期 handler/gesture class 时构建直接失败，避免把补丁静默应用到未知 Godot ABI。
+`sync-runtime-from-references.sh` 对 debug/release **staged** Godot template AAR 运行 `tools/android/patch-godot-input-pool.py`。修补器保留原始处理器作为内部 base，包装类只在 `obtain()` 前过滤未处理 action；JDK 21 自带 ASM 为原 `InputEventRunnable` 的 key/mouse/touch setter 捕获来源与生命周期 epoch，并包装原 `run`。支持的事件仍走原 setter、JNI 分发与 finally/recycle，不替换 Godot 输入翻译，也不修改参考 runtime。缺少预期 class、未知 setter/run 结构、部分转换或补丁完整性不符时 fail closed；完整补丁字节级幂等。
+
+`GodotInputSourceHost` 只有在 full compat Connect 来源信号并调用 `bindInputSource(long singletonObjectId)` 后才启用有序路由。绑定后 key/mouse/touch runnable 在 Godot render/main 队列执行，来源边界在 native 输入前同步通知 C#，使其先 flush 旧来源再更新策略；被转入 render 队列的同一个 runnable 不能提前归还池。pause/focus loss 更换 epoch，旧排队事件丢弃但仍走原回收；resume/focus regain 自动投递 Unknown 重置，无需再次 Ready。sensor/joy 不额外改路由，未绑定时保留原调度。`tools/android/input-shim/` 保存包装类、来源桥与 ASM 转换器源码；`FloatingMouseInputController` 的合成右键使用显式 Touch 入口，不能伪装成实体鼠标。运行协议与交互范围见[兼容包加载流程](../runtime/compat-pack-loading-flow.md)。
 
 ```bash
 # 检查两个本地参考 AAR 的修补结果；不会修改参考输入。
@@ -186,9 +192,13 @@ tools/android/test-godot-input-pool.sh
 
 # 完整构建会自动同步并应用修补，然后生成 importer APK。
 tools/package/build_importer_apk.sh
+
+# APK 构建已准备好 patched AAR 后，执行原 handler/plugin 的 Android 回归。
+tools/android/gradle-with-s2-env.sh testMonoReleaseUnitTest \
+  --tests com.godot.game.GodotInputSourceHostTest
 ```
 
-静态回归确认包装类不再取得 pooled runnable、原始支持事件路径仍存在，并覆盖 debug/release 两个 AAR。它不能替代蓝牙/USB 鼠标真机长时间测试；真机应确认持续点击数超过 600 次后触摸、鼠标和键盘仍可用，且 logcat 不再刷 `Input event pool is at capacity`。
+`test-godot-input-pool.sh` 使用 debug/release 两套原始 AAR 的实际 runnable 与池检查消费者可见来源顺序、缓冲事件边界、重复使用后的池容量、生命周期隔离、同步 rebind、幂等和未知形状拒绝；`GodotInputSourceHostTest` 进一步走原 handler，覆盖实体键鼠/touchpad、虚拟键、浮动右键及 plugin 暂停/焦点恢复。它们不能替代蓝牙/USB 键鼠真机测试；真机仍应检查输入法组合输入、触屏与键鼠交替、跨设备竞争手势和持续点击超过 600 次后所有输入仍可用，且 logcat 不再刷 `Input event pool is at capacity`。
 
 ## 5. 构建当前 compat fallback
 
@@ -298,7 +308,7 @@ legacy 分支构建模式仍可显式启用，用于回退诊断或对照旧发�
 COMPAT_PACK_BUILD_MODE=legacy tools/android/stage-bundled-compat-packs.sh
 ```
 
-legacy 模式读取 `tools/android/bundled-compat-packs.json`（或 `local.properties` 的 `compat.bundled_packs_config`），非当前分支使用 `compat.worktree_root`（默认 `.agent/worktrees/compat-packs/`）临时 worktree 构建；当前分支可直接使用 dirty worktree 方便测试。stage 脚本还会把共享热修源码注入 legacy worktree；该列表必须包含 `ModEntry.cs` 新增的直接依赖，目前包括 `DevTools/*.cs`、`RunHistoryPatches.cs`、`CombatAnimationWarmupPatches.cs`、`ExtendedMultiplayerRoomPatches.cs` 和资源释放保护所需的 `AndroidAssetCacheLifecyclePatches.cs`。
+legacy 模式读取 `tools/android/bundled-compat-packs.json`（或 `local.properties` 的 `compat.bundled_packs_config`），非当前分支使用 `compat.worktree_root`（默认 `.agent/worktrees/compat-packs/`）临时 worktree 构建；当前分支可直接使用 dirty worktree 方便测试。stage 脚本还会把共享热修源码注入 legacy worktree；该列表必须包含 `ModEntry.cs` 新增的直接依赖，目前包括 `DevTools/*.cs`、`RunHistoryPatches.cs`、`CombatAnimationWarmupPatches.cs`、`SpineWarmupPreview.cs`、`ExtendedMultiplayerRoomPatches.cs` 和资源释放保护所需的 `AndroidAssetCacheLifecyclePatches.cs`。
 
 也可以直接在 submodule 中局部构建 matrix 包：
 

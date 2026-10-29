@@ -67,11 +67,32 @@ MOD 卡片默认折叠，只显示左侧拖拽手柄、名称、版本/作者和
 - 分组拖拽的落点始终使用全局分组序号；列表前方 header 被 RecyclerView 回收后，屏内 ghost 与最终落地位置仍对应同一组。
 - “区间选择”按当前实际显示的 MOD 行及手工排序计算，跳过 header、ghost 和折叠组内容；既有显式隐藏选择保留，但不作为视觉区间端点。全选/反选仍保留原先包含折叠组内已过滤条目的范围。
 
-导入 MOD 时，Android shell 会先把选择的 zip/文件解包到 cache staging 目录并解析 manifest。如果发现新导入 manifest 的 `id` 与已安装 MOD 相同，会弹出冲突 Dialog，说明“连体现象”：界面可能显示两个项目，但任何一个开关都会按同 ID 同时影响两个。Dialog 会用信息卡分别展示原 MOD 和新 MOD，用户可选择保留原 MOD（丢弃本次 staging）或使用新 MOD（删除同 ID 原 MOD 后提交 staging）。该规则同样服务 Nexus 下载导入路径，避免同 ID manifest 在 `<files>/mods` 或隔离 MOD 根中长期并存。
+导入 MOD 时，Android shell 会先把选择的归档/文件解包到 cache staging 目录并解析 manifest。如果新 manifest 的 `id` 与已安装 MOD 相同，会弹出冲突 Dialog，分别展示原 MOD 和新 MOD，用户可保留原 MOD（丢弃本次 staging）或使用新 MOD。完整归档/目录默认按下述安装记录安全更新；本地/Nexus 的同 ID Dialog 可取消“完整更新”勾选，改为补丁式覆盖。更新保留单个 MOD 的启用状态、分组、备注和顺序，不再通过卸载再安装来替换文件。
 
-同 ID 冲突处理后，普通本地/Nexus 导入流程还会按 staging 到当前 MOD 根目录的实际相对路径预检文件覆盖。如果新导入内容会写入已经存在的 `.dll` / `.pck` / `.json` 或其它资源文件，且这些文件不属于用户刚确认替换的同 ID 旧 MOD，会再次弹出“文件覆盖”警告，列出会被覆盖的相对路径和可推断的现有归属；默认取消/保留已安装文件，只有用户明确选择替换时才继续。底层普通提交接口默认不允许未确认的路径覆盖，避免把 A MOD 的 DLL/PCK 静默替换成 B MOD 的文件；创意工坊导入则固定提交到对应 `published_file_id` item 目录，更新同一 item 时整体替换该目录。
+普通本地/Nexus 导入还会按 staging 到当前 MOD 根的实际相对路径预检覆盖。只有未被修改、且完全属于本次替换 MOD 的已记录文件，或无记录旧 MOD 的已知主文件，才可随同 ID 确认一起替换；修改过的文件、其他 MOD 或共享文件仍要求单独的“文件覆盖”确认。默认取消/保留已安装文件，提交时再次校验。ID/路径检查与文件哈希在后台执行，批量导入逐项重查，不复用前一项提交前的冲突快照。Workshop 仍以对应分支的 `published_file_id` item 目录为整目录替换边界。
+
+### 3.1 安装记录、完整更新与卸载
+
+`ModInstallStore` 将安装记录保存在 `<files>/launcher/mod-installs/<scope_sha256>/`，不放进会被游戏扫描的 MOD 目录。scope 是相对于 `<files>` 的实际 MOD 根目录；全局 MOD 共用一份记录，各隔离 profile 分开。记录包含 manifest 身份/版本、实际文件相对路径、长度、SHA-256 和归属集合，包含导入时生成的 manifest/DLL/PCK 别名。
+
+- **完整更新**：删除仅属于本次替换 MOD、内容仍与记录一致、且新包不再提供的旧文件，包括辅助 DLL、资源与旧目录中的文件；仅裁剪空目录，不推断整个现有父目录都属于该 MOD。
+- **补丁导入**：单独 DLL/文件或关闭“完整更新”的包仅覆盖，不因新包缺少某文件就删除它；已记录文件被补丁覆盖后保留归属并刷新哈希，后续完整更新/卸载仍能处理它。
+- **多 MOD 包**：主文件精确归属对应 MOD，辅助文件优先归属最近的 manifest 所在目录，无法唯一判断的路径记录为共享。更新/卸载一个 MOD 不删除其他 MOD 仍持有的共享文件；明确确认跨 MOD 覆盖时转交该路径归属，旧 MOD 不能随后将其误删。
+- **本地修改与未知文件**：更新时保留新包未提供的已修改旧文件并提示；未知/运行时生成文件不自动纳管或删除。卸载已记录但被修改的文件时，先在该 scope 的 `preserved/<uuid>/` 下持久备份，再从 MOD 目录移除，提示会给出备份位置。
+- **升级前已有的 MOD**：没有记录时只处理 manifest、`id` / `pck_name` 对应 DLL/PCK 等已知主文件，并提示无法推断旧辅助文件。首次更新不会凭目录位置清空历史文件；有历史残留时仍需手工确认清理。新导入内容从本次开始建立记录。
+- **Workshop**：整 item 替换继续移除 item 内旧内容（包括没有记录的内容）；同 ID 安装位于 item 外时，按普通完整更新规则清理已记录旧文件。item 目录与目录外清理共用文件/安装记录回滚事务，不退化为逐文件叠加。
+- **中断与安全边界**：文件和安装记录由独占锁及写前回滚日志保护；未提交的事务在后续恢复时还原，已提交事务只清理日志，启动游戏前必须恢复成功。路径穿越、符号链接、文件/目录类型冲突和损坏记录拒绝继续，不按“没有记录”处理。这里验证的是进程中断恢复，不承诺突然断电时的文件系统持久性。
+
+回归：`ModInstallReplacementTest`、`ModInstallStoreTest` 与 `ModImportSafetyTest`。宿主真实 ZIP/文件系统回归和跨 JVM 进程中断恢复 smoke 不代替 Android 真机更新、取消及导入 Dialog 验证。
 
 别名安全边界：manifest 的 `id` / `mod_id` / `modId` / `ID` 与 `pck_name` 的受支持拼写只能提供文件基名，不能含目录分隔符、控制字符、Windows 路径特殊字符或单独的 `.` / `..`；不改变合法 Unicode、点号、连字符名称。导入在别名生成和冲突确认前拒绝不安全名称；启动器清单扫描及 full compat 别名扫描不跟随符号链接，Java 与 full compat 的文件别名创建/删除再次校验同目录约束。该规则只限制导入与别名文件操作，不把普通 C# MOD 变成沙箱代码。运行时回归入口为 `port-mod/tests/ModManifestAlias.Tests`。
+
+### 2.2 导入归档格式与安全边界
+
+本地 MOD、Nexus 下载和 Workshop 下载目录中如果只包含一个归档文件，启动器会把它当作一次归档导入；单个 SAF 文件也会先按内容签名/名称识别。ZIP 继续使用现有 Java 解包路径，其他常见格式交给 `libarchive-android`：RAR/RAR5、7z、tar 及 gzip/bzip2/xz/zstd/lz4 压缩的 tar、单流压缩文件、cab、cpio、ar、lha 和 libarchive 构建支持的其它归档格式。导入 payload 使用同一套非 ZIP 解包器，SteamPipe 已下载目录不改变。
+
+归档只会展开到 app-private staging，并继续经过 MOD manifest、路径和文件覆盖检查。为避免归档炸弹或特殊文件逃逸，非 ZIP 归档拒绝加密条目、符号链接、硬链接、设备/套接字等特殊文件、路径穿越和超出条目/展开总量限制的输入；限制为 200,000 个条目、单文件 8 GiB、总展开 16 GiB。多卷归档必须由 libarchive 能从用户选择的主文件解析；加密归档需要先在可信设备解密后再导入。归档支持是离线导入能力，不改变运行时 MOD 加载协议。
+
 
 ### 3.1 三星 ROM 下拉菜单字体 fallback
 
@@ -217,6 +238,7 @@ v0.110.0 是游戏 MOD API 更新，不只是 Android target 更新；v0.110.1 �
 - 优先使用 prefix/postfix 和反射兜底，谨慎使用复杂 transpiler；Android 上 MonoMod/Cecil/Godot StringName 生命周期问题更容易暴露。
 - 任何直接引用游戏内部类型的 patch 都可能随游戏版本变化失效，应通过 active target compile gate 验证；只在单版本复现的问题优先收敛到 target adapter/capability 或条件编译，不要默认拆回 compat 分支。
 - `ModEntry.Apply()` patch 顺序很重要：BaseLib/RitsuLib 与平台/路径类 patch 必须早于 ModLoader。
+- BaseLib 扩展存档必须沿用其自身的 `ExtendedSavePatches.Patch(Harmony)` 注册，不得因历史 workaround 全局屏蔽 JSON 扩展字段；这会让 `CardModifier` 等数据在保存时静默丢失。当前只保留独立的异步状态机 hook 降级，不能把扩展存档恢复宣称为 BaseLib 完整兼容。修复不补回旧存档中已丢失的修改；测试前保留备份，并在目标 Android 设备上验证保存退出、进程重启和继续游戏。开发机数据回归见[离线验证流程](offline-mod-validation.md#33-baselib-扩展存档原生回归)。
 - Android temp 目录必须尽早配置，否则 Harmony/MonoMod 可能尝试使用不可写 `/tmp`。
 - Shader/resource overlay 资源应放入 `port-mod/overlay/`，重新打包 `port_compat.pck` 后才能生效。
 - 普通 MOD loader 的目标是尽量复用游戏原本的 scanner、dependency sort 和 TryLoadMod，减少与 PC 行为分叉。

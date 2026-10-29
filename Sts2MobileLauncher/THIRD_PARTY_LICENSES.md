@@ -28,7 +28,8 @@
 | 组件 | 本仓库位置/用途 | 许可证/注意事项 |
 | --- | --- | --- |
 | Godot Engine Android template | `android/` Gradle template 结构、`GodotApp.java` 等；构建时同步 Godot Android AAR / GodotSharp / Mono publish runtime 到 gitignored 路径。 | MIT。保留 Godot 文件头；完整 runtime 不入库。 |
-| Godot.NET.Sdk 4.5.1（仅原生回归） | `port-mod/tests/FramePreparation.Tests` 用官方 Godot .NET SDK 编译合成测试场景，配合官方桌面引擎验证真实 ResourceLoader/节点生命周期；不改变发布 APK 的依赖。 | MIT；<https://github.com/godotengine/godot>。测试引擎下载与生成产物仅保留在 ignored 路径，不提交。 |
+| Godot.NET.Sdk 4.5.1（仅原生回归） | `port-mod/tests/FramePreparation.Tests` 验证真实 ResourceLoader/节点生命周期；`port-mod/tests/BaseLibExtendedSave.Tests` 验证真实 BaseLib 扩展存档跨进程写入/读回；`port-mod/tests/SpineWarmup.Tests` 验证独立 Spine 预览的真实渲染与生命周期；均配合官方桌面 .NET 引擎，不改变发布 APK 的依赖。 | MIT；<https://github.com/godotengine/godot>。测试引擎下载与生成产物仅保留在 ignored 路径，不提交。 |
+| Spine Runtimes / spine-godot 4.2 | 独立 Spine 预览按公开原生 API 构造；`port-mod/tests/SpineWarmup.Tests` 另行使用官方 Godot 4.5.1 Linux GDExtension 与手写 skeleton/atlas、运行时生成纹理做真实渲染回归，不复制商业角色数据，也不新增 APK 依赖。 | [Spine Runtimes License Agreement](https://esotericsoftware.com/spine-runtimes-license)（2025-04-05）；[上游源码及许可](https://github.com/EsotericSoftware/spine-runtimes/tree/4.2)。不是 MIT：集成/分发须符合 Spine Editor License §2，或按 Runtime License 的另一条款由每名产品用户持有 Editor license，并随分发保留许可及版权；不能将可公开下载视为已获再分发授权。本次不提交原生库；已有 APK runtime 的 Spine 组件仍须按实际来源单独审计。 |
 | Electron / electron-builder | `windows/` Windows 启动器运行时与打包工具（npm devDependencies，打包时 Electron 运行时进入 `dist/windows/` 产物）。 | MIT；Electron 包含 Chromium 等组件，其 `LICENSES.chromium.html` 随打包产物分发。 |
 | yauzl / yazl | `windows/` 启动器读取 MOD ZIP、写入存档快照 ZIP。 | MIT。 |
 | Material Symbols Rounded | `android/res/font/material_symbols_rounded.ttf` 作为离线生成输入；`tools/android/generate-material-symbol-vectors.py` 从字体导出 `android/res/drawable/ic_ms_*.xml` 官方轮廓 vector，Java 侧 `MaterialSymbols` 运行时加载这些 vector 统一启动器 MD3 图标；Windows 启动器打包时直接内嵌该字体用于图标。 | Google Fonts / Material Symbols，Apache-2.0；生成的 vector 资源仍按该来源审计。 |
@@ -59,6 +60,7 @@
 | XZ for Java | Steam VZip/LZMA chunk 解压。 | Public Domain / 0BSD-style upstream notice |
 | zstd Android Prefab (`com.fpliu.ndk.pkg.prefab.android.21:zstd`) | Steam VZstd depot chunk JNI/native 解压。 | zstd upstream BSD-3-Clause / package metadata |
 | MTDataFilesProvider (`com.github.L-JINBIN:MTDataFilesProvider`) | debug/dev/release 文件访问 provider 依赖。 | 上游未检测到标准 license；发布前应单独确认。 |
+| libarchive-android `1.1.6` / libarchive | `ArchiveExtractor` 的非 ZIP 本体/MOD 归档读取；ZIP 仍走 Java 标准库路径。 | Android wrapper 以 Apache-2.0 发布；AAR 内置 libarchive 及其压缩组件，分别受 libarchive BSD-2-Clause/组件自带许可与 notices 约束（含 zlib、bzip2、XZ/liblzma、LZ4、zstd、Mbed TLS）；发布前审计实际 AAR 的完整 notices。 |
 
 ## 可选参考 MOD / 排查仓库
 
@@ -67,7 +69,7 @@
 | 名称 | URL | 用途 | 许可证/注意事项 |
 | --- | --- | --- | --- |
 | STS2-RitsuLib | <https://github.com/BAKAOLC/STS2-RitsuLib> | 常见前置 MOD 兼容性排查。 | MIT |
-| BaseLib-StS2 | <https://github.com/Alchyr/BaseLib-StS2> | 常见前置 MOD 兼容性排查。 | MIT |
+| BaseLib-StS2 | <https://github.com/Alchyr/BaseLib-StS2> | 常见前置 MOD 兼容性排查；`port-mod/tests/BaseLibExtendedSave.Tests` 动态加载用户本机提供的 DLL，验证卡牌修改数据的真实 JSON 持久化，不复制其源码或分发其二进制。 | MIT；不新增 APK 内置 BaseLib 依赖。 |
 | sts2-quickRestart | <https://github.com/freude916/sts2-quickRestart> | 快速重开 UI/流程兼容性参考。 | 未检测到标准 license；仅作本地参考。 |
 
 ## 发布前合规检查

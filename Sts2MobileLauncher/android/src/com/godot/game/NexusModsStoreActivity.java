@@ -20,6 +20,7 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
+import com.google.android.material.checkbox.MaterialCheckBox;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.snackbar.Snackbar;
 import com.google.android.material.textfield.TextInputEditText;
@@ -29,9 +30,12 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class NexusModsStoreActivity extends AppCompatActivity {
 	private static final String API_KEY_TUTORIAL_URL = "https://www.nexusmods.com/settings/api-keys";
+	private static final ExecutorService MOD_IMPORT_EXECUTOR = Executors.newSingleThreadExecutor(runnable -> new Thread(runnable, "sts2-nexus-mod-import"));
 
 	private ExtraSettingsRepository repository;
 	private LinearLayout resultsContainer;
@@ -40,6 +44,9 @@ public class NexusModsStoreActivity extends AppCompatActivity {
 	private TextView statusText;
 	private ProgressBar progressBar;
 	private boolean busy;
+	private volatile boolean importDestroyed;
+	private ExtraSettingsRepository.PreparedModImport activeModImport;
+	private AlertDialog modImportDialog;
 
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
@@ -55,6 +62,42 @@ public class NexusModsStoreActivity extends AppCompatActivity {
 		} else {
 			showWelcomeState();
 		}
+	}
+
+	@Override
+	protected void onDestroy() {
+		importDestroyed = true;
+		if (modImportDialog != null) modImportDialog.dismiss();
+		discardModImport(activeModImport);
+		super.onDestroy();
+	}
+
+	private boolean isModImportUiUnavailable() {
+		return importDestroyed || isFinishing() || isDestroyed();
+	}
+
+	private void runImportUi(Runnable action) {
+		runOnUiThread(() -> { if (!isModImportUiUnavailable()) action.run(); });
+	}
+
+	private void discardModImport(ExtraSettingsRepository.PreparedModImport prepared) {
+		if (prepared != null) MOD_IMPORT_EXECUTOR.execute(() -> repository.discardPreparedModImport(prepared));
+	}
+
+	private void cancelModImport(ExtraSettingsRepository.PreparedModImport prepared) {
+		discardModImport(prepared);
+		activeModImport = null;
+		finishBusy(getString(R.string.nexus_mod_store_status_idle));
+		showMessage(getString(R.string.status_import_mod_cancelled));
+	}
+
+	private void failModImport(ExtraSettingsRepository.PreparedModImport prepared, Exception exception) {
+		repository.discardPreparedModImport(prepared);
+		runImportUi(() -> {
+			activeModImport = null;
+			finishBusy(getString(R.string.nexus_mod_store_status_idle));
+			showError(exception);
+		});
 	}
 
 	private View buildContent() {
@@ -549,108 +592,104 @@ public class NexusModsStoreActivity extends AppCompatActivity {
 	}
 
 	private void downloadAndInstall(NexusModsApiClient.NexusMod mod, NexusModsApiClient.NexusModFile file, String key, String expires) {
-		if (!ensureApiKey() || busy) {
-			return;
-		}
+		if (!ensureApiKey() || busy || isModImportUiUnavailable()) return;
 		beginBusy(getString(R.string.nexus_mod_store_status_getting_download_link));
-		new Thread(() -> {
+		MOD_IMPORT_EXECUTOR.execute(() -> {
 			File downloadedFile = null;
 			try {
 				NexusModsApiClient client = apiClient();
 				List<NexusModsApiClient.DownloadLink> links = client.getDownloadLinks(mod.modId, file.fileId, key, expires);
-				if (links.isEmpty()) {
-					throw new NexusModsApiClient.NexusApiException(403, "", getString(R.string.nexus_mod_store_download_link_empty));
-				}
+				if (links.isEmpty()) throw new NexusModsApiClient.NexusApiException(403, "", getString(R.string.nexus_mod_store_download_link_empty));
+				if (importDestroyed) return;
 				NexusModsApiClient.DownloadLink link = links.get(0);
-				runOnUiThread(() -> updateProgress(0, getString(R.string.nexus_mod_store_status_downloading_from, link.name)));
-				downloadedFile = client.downloadToCache(link.uri, fallbackDownloadFileName(mod, file), (percent, copied, total) -> runOnUiThread(() -> updateProgress(percent, getString(R.string.nexus_mod_store_status_downloading_percent, percent))));
-				ExtraSettingsRepository.PreparedModImport preparedImport = repository.prepareDownloadedModImport(downloadedFile, downloadedFile.getName());
-				File finalDownloadedFile = downloadedFile;
+				runImportUi(() -> updateProgress(0, getString(R.string.nexus_mod_store_status_downloading_from, link.name)));
+				downloadedFile = client.downloadToCache(link.uri, fallbackDownloadFileName(mod, file), (percent, copied, total) -> runImportUi(() -> updateProgress(percent, getString(R.string.nexus_mod_store_status_downloading_percent, percent))));
+				if (importDestroyed) return;
+				ExtraSettingsRepository.PreparedModImport prepared = repository.prepareDownloadedModImport(downloadedFile, downloadedFile.getName());
 				runOnUiThread(() -> {
-					finishBusy(getString(R.string.nexus_mod_store_status_idle));
-					if (finalDownloadedFile != null && finalDownloadedFile.exists()) {
-						// Best effort cleanup of the cache copy after staging is prepared.
-						finalDownloadedFile.delete();
+					if (isModImportUiUnavailable()) {
+						discardModImport(prepared);
+						return;
 					}
-					handlePreparedDownloadedModImport(preparedImport);
+					activeModImport = prepared;
+					handlePreparedDownloadedModImport(prepared);
 				});
 			} catch (NexusModsApiClient.NexusApiException exception) {
-				File finalDownloadedFile = downloadedFile;
-				runOnUiThread(() -> {
+				runImportUi(() -> {
 					finishBusy(getString(R.string.nexus_mod_store_status_idle));
-					if (finalDownloadedFile != null && finalDownloadedFile.exists()) {
-						finalDownloadedFile.delete();
-					}
 					showDownloadPermissionDialog(mod, file, exception);
 				});
 			} catch (Exception exception) {
-				File finalDownloadedFile = downloadedFile;
-				runOnUiThread(() -> {
+				runImportUi(() -> {
 					finishBusy(getString(R.string.nexus_mod_store_status_idle));
-					if (finalDownloadedFile != null && finalDownloadedFile.exists()) {
-						finalDownloadedFile.delete();
-					}
 					showError(exception);
 				});
+			} finally {
+				if (downloadedFile != null) downloadedFile.delete();
 			}
-		}, "sts2-nexus-download").start();
+		});
 	}
 
-	private void handlePreparedDownloadedModImport(ExtraSettingsRepository.PreparedModImport preparedImport) {
-		List<ExtraSettingsRepository.ModImportConflict> idConflicts = repository.findCurrentImportConflicts(preparedImport);
-		if (!idConflicts.isEmpty()) {
-			showModImportConflictDialog(preparedImport, idConflicts,
-				() -> {
-					repository.discardPreparedModImport(preparedImport);
-					showMessage(getString(R.string.status_import_mod_cancelled));
-				},
-				() -> handlePreparedDownloadedModPathConflicts(preparedImport, true, idConflicts),
-				() -> {
-					repository.discardPreparedModImport(preparedImport);
-					showMessage(getString(R.string.status_import_mod_cancelled));
-				});
-			return;
-		}
-		handlePreparedDownloadedModPathConflicts(preparedImport, false, idConflicts);
-	}
-
-	private void handlePreparedDownloadedModPathConflicts(ExtraSettingsRepository.PreparedModImport preparedImport, boolean replaceExistingConflicts, List<ExtraSettingsRepository.ModImportConflict> confirmedIdConflicts) {
-		List<ExtraSettingsRepository.ModImportPathConflict> pathConflicts = repository.findCurrentImportPathConflicts(preparedImport, replaceExistingConflicts ? confirmedIdConflicts : new ArrayList<>());
-		if (!pathConflicts.isEmpty()) {
-			showModImportPathConflictDialog(preparedImport, pathConflicts,
-				() -> {
-					repository.discardPreparedModImport(preparedImport);
-					showMessage(getString(R.string.status_import_mod_cancelled));
-				},
-				() -> commitPreparedDownloadedModImport(preparedImport, replaceExistingConflicts, true),
-				() -> {
-					repository.discardPreparedModImport(preparedImport);
-					showMessage(getString(R.string.status_import_mod_cancelled));
-				});
-			return;
-		}
-		commitPreparedDownloadedModImport(preparedImport, replaceExistingConflicts, false);
-	}
-
-	private void commitPreparedDownloadedModImport(ExtraSettingsRepository.PreparedModImport preparedImport, boolean replaceExistingConflicts, boolean allowPathConflicts) {
-		if (busy) {
-			return;
-		}
+	private void handlePreparedDownloadedModImport(ExtraSettingsRepository.PreparedModImport prepared) {
 		beginBusy(getString(R.string.status_busy_import_mod));
-		new Thread(() -> {
+		MOD_IMPORT_EXECUTOR.execute(() -> {
 			try {
-				String importedName = repository.commitPreparedModImport(preparedImport, replaceExistingConflicts, allowPathConflicts);
-				runOnUiThread(() -> {
-					finishBusy(getString(R.string.nexus_mod_store_status_download_done, importedName));
-					showMessage(getString(R.string.nexus_mod_store_status_download_done, importedName));
+				List<ExtraSettingsRepository.ModImportConflict> conflicts = repository.findCurrentImportConflicts(prepared);
+				runImportUi(() -> {
+					if (conflicts.isEmpty()) {
+						handlePreparedDownloadedModPathConflicts(prepared, false, conflicts);
+					} else {
+						Runnable cancel = () -> cancelModImport(prepared);
+						showModImportConflictDialog(prepared, conflicts, cancel,
+							() -> handlePreparedDownloadedModPathConflicts(prepared, true, conflicts), cancel);
+					}
 				});
 			} catch (Exception exception) {
-				runOnUiThread(() -> {
-					finishBusy(getString(R.string.nexus_mod_store_status_idle));
-					showError(exception);
-				});
+				failModImport(prepared, exception);
 			}
-		}, "sts2-nexus-mod-import-commit").start();
+		});
+	}
+
+	private void handlePreparedDownloadedModPathConflicts(ExtraSettingsRepository.PreparedModImport prepared, boolean replaceExistingConflicts, List<ExtraSettingsRepository.ModImportConflict> confirmedIdConflicts) {
+		MOD_IMPORT_EXECUTOR.execute(() -> {
+			try {
+				List<ExtraSettingsRepository.ModImportPathConflict> conflicts = repository.findCurrentImportPathConflicts(prepared, replaceExistingConflicts ? confirmedIdConflicts : new ArrayList<>());
+				runImportUi(() -> {
+					if (conflicts.isEmpty()) {
+						commitPreparedDownloadedModImport(prepared, replaceExistingConflicts, false);
+					} else {
+						Runnable cancel = () -> cancelModImport(prepared);
+						showModImportPathConflictDialog(prepared, conflicts, cancel,
+							() -> commitPreparedDownloadedModImport(prepared, replaceExistingConflicts, true), cancel);
+					}
+				});
+			} catch (Exception exception) {
+				failModImport(prepared, exception);
+			}
+		});
+	}
+
+	private void commitPreparedDownloadedModImport(ExtraSettingsRepository.PreparedModImport prepared, boolean replaceExistingConflicts, boolean allowPathConflicts) {
+		if (isModImportUiUnavailable()) return;
+		MOD_IMPORT_EXECUTOR.execute(() -> {
+			try {
+				if (importDestroyed) return;
+				String importedName = repository.commitPreparedModImport(prepared, replaceExistingConflicts, allowPathConflicts);
+				String notice = prepared.getFileNotice();
+				runImportUi(() -> {
+					activeModImport = null;
+					finishBusy(getString(R.string.nexus_mod_store_status_download_done, importedName));
+					showMessage(getString(R.string.nexus_mod_store_status_download_done, importedName));
+					if (!TextUtils.isEmpty(notice)) {
+						modImportDialog = new MaterialAlertDialogBuilder(this)
+							.setTitle(R.string.mod_import_file_notice_title).setMessage(notice)
+							.setPositiveButton(android.R.string.ok, null).show();
+					}
+				});
+			} catch (Exception exception) {
+				failModImport(prepared, exception);
+			}
+		});
 	}
 
 	private void showModImportConflictDialog(ExtraSettingsRepository.PreparedModImport preparedImport, List<ExtraSettingsRepository.ModImportConflict> conflicts, Runnable keepOriginal, Runnable useNew, Runnable cancelImport) {
@@ -658,6 +697,14 @@ public class NexusModsStoreActivity extends AppCompatActivity {
 		content.setOrientation(LinearLayout.VERTICAL);
 		content.setPadding(ExtraSettingsUi.dp(this, 4), ExtraSettingsUi.dp(this, 8), ExtraSettingsUi.dp(this, 4), 0);
 		content.addView(ExtraSettingsUi.body(this, getString(R.string.mod_import_conflict_message)));
+		content.addView(ExtraSettingsUi.body(this, getString(R.string.mod_import_replacement_notice)));
+		if (preparedImport.fullPackage) {
+			MaterialCheckBox fullUpdate = new MaterialCheckBox(this);
+			fullUpdate.setText(R.string.mod_import_replace_tracked_files);
+			fullUpdate.setChecked(preparedImport.isReplaceTrackedFiles());
+			fullUpdate.setOnCheckedChangeListener((button, checked) -> preparedImport.setReplaceTrackedFiles(checked));
+			content.addView(fullUpdate);
+		}
 		for (ExtraSettingsRepository.ModImportConflict conflict : conflicts) {
 			TextView conflictTitle = ExtraSettingsUi.text(this, getString(R.string.mod_import_conflict_id_format, conflict.modId), 15, ExtraSettingsUi.COLOR_ON_SURFACE, android.graphics.Typeface.BOLD);
 			LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -670,7 +717,7 @@ public class NexusModsStoreActivity extends AppCompatActivity {
 		}
 		ScrollView scrollView = new ScrollView(this);
 		scrollView.addView(content, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-		new MaterialAlertDialogBuilder(this)
+		modImportDialog = new MaterialAlertDialogBuilder(this)
 			.setTitle(R.string.mod_import_conflict_title)
 			.setView(scrollView)
 			.setNegativeButton(R.string.mod_import_conflict_keep_original, (dialog, which) -> keepOriginal.run())
@@ -708,7 +755,7 @@ public class NexusModsStoreActivity extends AppCompatActivity {
 		}
 		ScrollView scrollView = new ScrollView(this);
 		scrollView.addView(content, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-		new MaterialAlertDialogBuilder(this)
+		modImportDialog = new MaterialAlertDialogBuilder(this)
 			.setTitle(R.string.mod_import_path_conflict_title)
 			.setView(scrollView)
 			.setNegativeButton(R.string.mod_import_path_conflict_keep_installed, (dialog, which) -> keepInstalled.run())

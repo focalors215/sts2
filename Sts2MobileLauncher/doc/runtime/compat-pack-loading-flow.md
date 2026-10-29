@@ -163,9 +163,19 @@ Steam Cloud 与 WebDAV 的非强制同步使用逐文件的共同基线：仅本
 - 根据附加设置中的 `log_level`（默认 `info`，可选 `off` / `debug` / `very_debug`）追加 STS2 原生命令行 `-log <LogType> <LogLevel>`，覆盖 `Generic`、`Network`、`Actions`、`GameSync`、`VisualSync` 的运行日志等级；`off` 时不追加 STS2 `-log` 参数，Debug/Very Debug 会增加日志量并在下次启动生效。
 - 根据附加设置中的 `android_performance_overlay_enabled` 写入或清理 `<files>/launcher/enable_debug_menu.flag`；开启后 compat overlay 加载 `godot-debug-menu` 详细性能面板，默认关闭。
 - `android_volume_up_soft_keyboard` 默认关闭；启用后，`GodotApp` 只有在 Activity resumed、有焦点且 Godot render/input proxy 已初始化时才消费音量上键，并在 `ACTION_UP` 通过 `GodotKeyboardBridge` 调用 Godot 自带 `GodotIO.showKeyboard()`。桥接层从现有 View 树复用透明 `GodotEditText`，保留其文本、光标/选区、输入类型与长度限制；文本提交、中文组合、退格和回车继续由 Godot `GodotTextInputWrapper` 送入原生 input pipeline，而软键盘实际产生的 F1–F12 非文本 `KeyEvent` 由该代理直接交给同一个 `GodotInputHandler`。桥不可用时不消费音量键，也不创建无 Godot `InputConnection` 的替代 `EditText`。应用内快捷面板的软键盘入口复用同一路径。
+- 当前 APK 配合 **full compat** 的 `MobileInputPolicyPatches` 按实际操作自动切换触屏与键鼠策略，不监听设备连接来切模式，也不新增设置。真实实体键盘非重复按下、鼠标按键/滚轮或累计至少 4 个逻辑像素的净移动进入键鼠策略；过大的指针 warp 不计入切换，下一次手指按下恢复用户保存的触屏预览、奖励/商店二次确认与 tooltip 模式。实体键鼠使用原版 PC 语义，不改键位映射；实体 Escape 保留原版可重绑定的真实按下/松开，Android Back 才走 cancel/pause 兼容。内置全键盘、IME、音量/返回键及手柄不冒充实体键盘；浮动右键和引擎 `Device=-1` 触摸仿真仍属于触屏。
+  - 来源 ABI：`GodotInputSourceHost` singleton 的 `android_input_source(int)`，数值为 Unknown=0、Touch=1、HardwareMouse=2、HardwareKeyboard=3、Virtual=4。C# 先 Connect，再调用 `bindInputSource(long)` 并传入 **plugin 自己**的 `GetInstanceId()`；staged runnable 在实际 native 派发前于 Godot 主线程同步发送来源边界，C# 先 `Input.FlushBufferedEvents()` 排空旧来源，再安装新来源。不能用 UI 线程的瞬时全局布尔值标记后续输入。NGame Ready 后在 root 最后一个 sibling 挂 plain Node + 小型 GDScript `_input` 信号观察器，确保策略更新早于游戏后代 `_Input` 和 GUI；不依赖普通 Microsoft.NET.Sdk 缺少的自定义 Godot C# 虚回调胶水。
+  - 游戏只有一个共享指针：手指/触摸仿真鼠标或实体鼠标一旦按下，就保持该手势策略，直至全部相关触点与按钮释放、GUI 完成当前释放事件后才提交待切换模式。另一指针来源的竞争流及其残余松开会被吞掉，不能接管原拖拽或造成第二次点击；键盘热键本身仍正常传递。切换时清理预览 pin、suppressed hover、pending 奖励/购买与 tooltip 计时并恢复 PC hover，不自动出牌、发奖或购买，也不取消原版已开始的 cardplay。暂停/失焦清理策略暂存，Java epoch 拒绝旧排队输入；恢复时自动重置来源，无需重跑 Ready。无 full compat 绑定时保留原输入调度，offline bootstrap 不包含本策略。
+  - 模式切换、暂停/失焦与观察器解绑还会清空两指查看的触点及被吞次指，并失效已排队的查看回调；恢复后的首个手指不会和旧触点组成两指手势，新的两指查看仍可用。Android Back 在 `mobile` feature 缺失但系统名为 Android 时同样保留，实体 Escape 不会因此转换为 Android action。
+  - full compat 同时修复 Android 实体鼠标瞄准结束后光标仍不可见、再点击才恢复的问题：仅在原版 `NTargetingArrow.StopDrawing()` 或其自身的退出回调已将鼠标瞄准从 `Hidden` 恢复到 `Visible` 后，通过原版 `NCursorManager.UpdateCursor()` 重新提交当前光标图像与热点。瞄准过程中仍隐藏；触屏策略、手柄接管、主动隐藏及原版仍保持隐藏的结果不强制显示，不改 Godot native runtime、鼠标显示模式或出牌/取消行为。
+- “设置 → 操作 → 使用内置全键盘”（`android_builtin_full_keyboard`，默认关闭）启用应用内 PC 布局键盘，保留上方“全键盘 / 系统键盘”切换器；内置按键经 `GodotInputHandler.onKeyDown/onKeyUp` 走物理键盘路径，系统键盘继续复用原 Godot 输入代理。`BuiltinKeyboardLayout.Key` 在构造时将缺失的副标签统一保存为空字符串；空格键虽然有基础文本 `" "`，但没有副标签，不能把这种合法组合视为异常或在绘制时解引用 null。`BuiltinKeyboardViewTest.spaceIsUsableAfterTheFirstKeyboardDraw` 使用原生绘图覆盖面板首次绘制后点击空格的完整路径，避免仅测布局与触摸而漏掉 `onDraw()` 崩溃。
+  - Esc 与 F1–F12 始终显示，左上角不再提供 Fn 折叠入口；切换系统键盘或收起重开后仍显示完整功能键行。方向键使用 `↑ ↓ ← →` 标签，继续发送物理方向键事件，不提交箭头字符。
+  - 切换器右侧的关闭按钮会收起当前键盘与切换条，清空 Shift/Ctrl/Alt/Win/CapsLock 状态，但记住上次选择的键盘类型。系统键盘模式下，系统 IME 收起后切换条也自动隐藏；IME 尚未显示时的初始隐藏通知不会取消打开请求，切回全键盘后迟到的 IME 隐藏通知也不会关闭全键盘。系统模式的返回键交给 Android 收起 IME。
+  - Ctrl/Alt/Shift/Win 的持续锁定（`LOCKED`）使用更深背景，与未启用和只对下一键有效的锁存（`LATCHED`）区分；Caps Lock 开启时也使用深色。关闭键盘或离开游戏会清空这些状态。
+- “设置 → 操作 → 键盘悬浮按钮”（`android_floating_keyboard_enabled`，默认关闭）提供独立的游戏内键盘入口，不申请系统悬浮窗权限，也不要求开启内置全键盘。点击时复用音量键/快捷面板的就绪检查与键盘路径：启用全键盘时打开上次选择的类型，未启用时打开系统软键盘。按钮可拖动，按安全区域比例独立保存位置，拖动/取消不打开键盘，空白区域不阻挡游戏触摸；收起键盘后按钮保留，暂停时拆除，返回游戏后按当前设置重建。开关写入当前 profile 的 `settings.save`，full compat 保存游戏设置时通过 `AndroidSettingsMerge` 保留。
 - “设置 → 操作 → 鼠标左右键悬浮按钮”（`android_floating_mouse_enabled`，默认关闭）独立于快捷面板，只在游戏 Activity 内显示，不申请系统悬浮窗权限。56dp 圆形按钮可拖动并记忆相对位置，避开系统栏/刘海；闲置 1.5 秒后淡至 20% 不透明度，操作时恢复。样式参考 [SlayTheAmethystModded](https://github.com/ModinMobileSTS/SlayTheAmethystModded)，输入逻辑和图标独立实现。
   - 按钮依次切换 **左键 → 单次右键 → 锁定右键 → 左键**。单次右键在下一次游戏画面的手指按下/移动/释放结束后恢复左键；在使用前再次点按钮则锁定，不依赖系统双击时间阈值。锁定时高亮背景和锁标记，持续右键，直到再点一次解锁。拖动或取消按钮手势不切换模式。
-  - `FloatingMouseInputController` 仅拦截 Godot render View 上新开始的手指右键手势，使用 `SOURCE_MOUSE` / `BUTTON_SECONDARY` 经 `GodotInputHandler.onGenericMotionEvent()` 送入原生队列。原触屏事件不重复传入；额外手指及主指抬起后的残余手指被吞掉，避免双指查看或误发左键。左键模式、已开始的普通左键手势与实体鼠标/触控笔保持原路径；不改 Android Surface 或 Godot 坐标变换。
+  - `FloatingMouseInputController` 仅拦截 Godot render View 上新开始的手指右键手势，使用 `SOURCE_MOUSE` / `BUTTON_SECONDARY` 经 `GodotInputHandler.onSyntheticTouchMouseEvent()` 显式标记 Touch，再复用原 `onGenericMotionEvent()` 与 native 队列。原触屏事件不重复传入；额外手指及主指抬起后的残余手指被吞掉，避免双指查看或误发左键。左键模式、已开始的普通左键手势与实体鼠标/触控笔保持原路径；不改 Android Surface 或 Godot 坐标变换。
   - 失焦、暂停、render View 离开窗口及关闭功能时释放已按下右键；锁定选择在普通前后台切换时保留，关闭开关或销毁 Activity 后重置左键。从附加设置返回立即按开关拆除/重建按钮与监听器。开关按当前 profile 的 `settings.save` 保存，full compat 的 `AndroidSettingsMerge` 保留该键；位置独立存入 `floating_mouse_overlay` 偏好。输入流所有权边界回归：`FloatingMouseInputTest`。
 - 可选应用内快捷面板（`android_in_game_overlay_enabled`，默认关）：`GodotApp` 用 `addContentView` 叠可拖动、自动贴边并避开系统手势/刘海安全区的“快捷”入口，点击打开从左侧滑入的无标题快捷抽屉，宽度约占可用屏幕 40%，左侧使用竖向图标页签区分功能页，**不**申请系统悬浮窗权限。抽屉右侧暗色空白区和系统 Back 优先关闭抽屉，所有主操作目标至少 48dp；快捷页在开发者工具开启时用带图标的 MD 卡片展示当前 profile / payload / compat，从附加设置返回游戏时会按当前开关拆除或重建入口。开发者工具（`android_dev_tools_enabled`）启用检查器；写入需 `android_dev_inspector_writable`。只有当前的 **full compat** 包包含 C# `DevToolsHost`；offline bootstrap 或旧完整包会明确提示检查器不可用。Host 独立于其余可选补丁启动，轮询 `<files>/launcher/devtools/request.json`，用 `host.json` ready marker 公布就绪状态，并为 protocol 2 请求原子写入各自的 `response-<uuid>.json`（客户端仍兼容旧 `response.json`）；只读检查器请求在 host 已就绪但未响应时有限重试一次。检查器 Runtime 页支持 STS2/compat C# 根对象反射浏览/简单值改写；Scene 页 scene tree 默认全折叠，每行只显示节点名与按类型字符串稳定散列的高对比类型色，自定义类型隐藏 `managed / native` 斜杠后的 native type；缩进区用 Canvas 自绘 Godot/Windows 风格连接线与加减框，仅 tree 列表超宽时启用横向滚动，打开 Node/Godot 对象后列表强制测量为父容器可用宽度且不可横向滚动，左侧按钮和缩进区切换展开，正文进入 Node，右侧不再有进入按钮。Node 标题/固定信息不显示 Path；Node 与其他 Godot 自定义对象属性使用 `ToString()` 风格预览，并可通过对象实例引用继续嵌套下钻。不可编辑且不可下钻的信息会显示复制图标，点击正文或图标都复制值。顶部统一为等尺寸图标按钮且只在存在返回目标时显示返回键。可写模式下可编辑简单属性和执行临时 GDScript（变量 `root` / `tree` / `node`）；非 Nil 返回值通过可选中、可复制的结果 Dialog 展示，无返回值只提示完成，不提供与脚本能力重复的独立 Node 方法调用入口；写入/脚本操作审计写入 `<files>/logs/dev-tools.log`。它还支持重启游戏进程与 companion 设置 runtime apply。实时日志默认 tail 当前 profile 的 `godot.log`，可切换全局 `sts2.log`，日志正文用 `RecyclerView` 按行复用并按等级着色，右侧提供顶部、底部、自动贴底和筛选齿轮按钮；日志源、等级筛选与搜索框默认隐藏，点齿轮后显示。由于 `GodotApp` 仍使用 Godot DeviceDefault theme，抽屉中的 Material confirmation/edit dialog 必须用 `Theme.Sts2ExtraSettings` wrapper 创建。
   快捷面板日志页在独立低优先级线程分批读取，每批最多 256 KiB，最多保留 2,000 行、显示筛选后的末尾 500 行；积压分批追赶，不在主线程扫描文件或逐行解码。UTF-8 半字符跨批次保留；未换行但字符完整的末行仍显示，后续内容延长同一行，不拆成重复记录。inode 变化或文件长度缩短触发轮转/截断重置，换源和停止后丢弃旧会话回调。无新增行时不重复提交；普通追加只通知 RecyclerView 的头部移除和尾部插入，筛选、清屏和自动贴底功能保留。
@@ -202,6 +212,7 @@ STS2Mobile.ModEntry
 
 2. `PlatformPatches` 与 `SavePathPatches` 作为保命 patch 最先独立应用；前者跳过桌面 Steam 初始化，后者重定向当前 launch profile 的存档/设置路径。两组 patch 分别捕获异常，避免后续诊断或 UI patch 在特定 ROM 上失败时导致原版 `steam_api64` 路径重新执行。PC / Steam Cloud 带来的历史记录仍保留原始 `PlatformType.Steam` 元数据；早期本地化保护安装后，`RunHistoryPatches` 只把历史详情 `DisplayRun`、玩家切换 `SelectPlayer` 和玩家图标 `LoadRun` 中的身份查询替换为安全 wrapper：桌面 Steamworks 未初始化或原生库不可用时，本地 ID 回落到 Android/null-platform ID（多人未命中时沿用原版“选择第一个玩家”逻辑），名称回落到 null-platform 已缓存名称或稳定 ID 文本。该补丁不改写历史文件，也不改变 Steam transport、邀请或大厅协议。
 3. BaseLib/RitsuLib/ModelDb/UnlockState 兼容。
+   - `BaseLibCompatPatches` 只保留对 `BaseLib.Utils.Patching.AsyncMethodCall.Create` 的异步状态机 hook 屏蔽，不再拦截 `BaseLib.Patches.Saves.ExtendedSavePatches.Patch(Harmony)`。BaseLib 在自己的初始化阶段为卡牌、遗物、药水、奖励、玩家与整局存档注册 JSON 扩展字段，保留原有数据格式与恢复流程；注册不能延迟到首次序列化元数据缓存之后。依赖 `CardModifier` 的永久卡牌修改因此可以写入存档；已经丢失的字段不会自动重建，应从仍含记录的备份恢复。这不表示 BaseLib 异步 hooks 已恢复，也不表示所有 MOD 已完成 Android 验证。真实 BaseLib 的跨进程磁盘回归见[离线验证流程](../modding/offline-mod-validation.md#33-baselib-扩展存档原生回归)。legacy worktree 注入同步包含 `BaseLibCompatPatches.cs`，避免诊断包恢复旧屏蔽。
    - 关键时序不变式：MOD 如 YuWanCard/BaseLib 用 `ModelDb.GetEntry` 的 Harmony postfix 给自定义内容 ID 加命名空间前缀（如 `ENCOUNTER.YUWANCARD-KILLER_ELITE`），并按 type **永久缓存**第一次 `GetEntry` 结果。PC 上每个 MOD 的 `PatchAll` 在 `ModManager.Initialize`（`ExecuteVeryEarly`）期间运行，严格早于 `ModelDb.Init`（`ExecuteEssential`），因此 ID 计算时前缀 patch 早已就位。兼容层必须**在 MOD patch 全部应用前，绝不对任何 MOD 模型类型调用 `ModelDb.GetId`/`GetEntry`**，否则会污染前缀缓存并把模型注册到错误 key。
    - `ModelDbInitPatch` 把 `ModelDb.Init` 替换为干净的 two-phase，并分两层处理占位：
      - **早期原版 shadow 占位**：`ModLoaderPatches` 在加载任何 MOD 之前枚举 `AbstractModelSubtypes.All`（仅原版），只把未初始化对象放入 shadow registry，不写入原版 `ModelDb._contentById`。早期 `Get<T>()`、`Get(Type)`、`GetById<T>` / `GetByIdOrNull<T>` 及各类别 getter 均通过 canonical 字典的按键读取访问同一 shadow 对象；已有 canonical 内容优先，缺失 ID、null key、错误类别转换仍由原版处理。不能逐个 patch 闭合泛型方法：引用类型共享 native 方法体，会把 `GetId<T>()` 和类型转换固化成错误的 T。两个字典 prefix 只接受 canonical 实例，不暴露其他字典的 shadow；phase 1 原子发布同一对象后移除这两个 prefix，不给稳态游戏字典增加 wrapper。
@@ -229,6 +240,7 @@ STS2Mobile.ModEntry
   `IntentAnimationPatches` 使用 Harmony 字段注入读取当前动画名、Sprite 和浮动参数，不逐帧查找字段。已有原版 `_animationFrames: List<Texture2D>` 的 payload 直接复用该列表；旧 API 则按当前意图实例惰性缓存已播放纹理帧，换动画/退出树后解除引用。保持兼容层现有 24 FPS 动画和浮动 tween，不扩大预加载范围；`UpdateIntent()` 以外的战斗状态更新也必须立即反映到播放动画。legacy staging 同时注入 `IntentAnimationPatches.cs`、`TouchInputPatches.cs` 和 `AndroidInputCompatPatches.cs`。
 
   合成回归使用实际打包的 Harmony、不包含商业游戏实现：在仓库根加载 `.env` 后运行 `"$DOTNET_BIN" run --project port-mod/tests/MobileHotPath.Tests -c Release -p:HarmonyReferenceDir="$PWD/android/assets/dotnet_bcl"`，再追加 `-p:LegacyIntent=true` 验证没有原版动画帧列表的旧 API。覆盖模式切换、长按重建、拖动/松手、详情父节点迁移、稳定帧分配预算、意图动态变化和释放事件语义；本机合成分配结果不能直接解释为 Android FPS 提升。
+  自动切换状态机单独运行 `"$DOTNET_BIN" run --project port-mod/tests/MobileInputPolicy.Tests -c Release`，覆盖触摸与仿真鼠标共同收尾、多按钮、多指、竞争流残余释放、移动阈值和生命周期复位；上述 `MobileHotPath.Tests` 同时覆盖实际五组 consumer 的键鼠/桌面 bypass、触屏保留和切换后迟到确认不得提交。Java runnable/host 的顺序与 epoch 回归见[构建文档 §4.3](../build/building-and-packaging.md#43-godot-android-输入事件池与有序来源修复)。这些合成回归不是蓝牙/USB 键鼠真机认证。
 
   Shader 兼容不再 patch `Node.AddChild` / `AddChildSafely` 并重复扫描整棵新增子树。`NGame._Ready` 后仅在开关启用时订阅 `SceneTree.NodeAdded`，收集实际新增的 CanvasItem，同一批节点在父子 `_Ready` 全部完成后的 idle 回调统一检查，避免漏掉父节点 `_Ready` 对子材质的赋值。被移除/释放的节点跳过；初次安装与手动启用时才遍历已有树，使用索引而不是 `GetChildren()` 数组。关闭时退订，默认关闭路径不会增加逐节点设置查询；重新启用会补齐已有节点。替代 Shader 按有限路径表复用，每个节点仍获得独立材质副本，不修改原始共享材质，卡面 `canvas_group_mask_blur.gdshader` 仍不替换。关闭开关不会把已替换材质恢复原版，需要重启才能完全撤销。
 
@@ -243,7 +255,7 @@ STS2Mobile.ModEntry
    - `preload_vfx_tree_warmup_scope`：VFX 实际播放范围，默认 `safe`；`safe` 只跑安全名单，包含常见战斗 VFX 与猎人小刀/匕首 VFX；`all` 会逐个尝试让 `res://scenes/vfx/**/*.tscn` 全部进树跑帧，单项失败会记录并跳过，主要用于卸载重装后填充 Godot shader cache 的高内存诊断，不会自动执行卡牌/怪物战斗逻辑。
    - `preload_vfx_tree_warmup_frames`：普通安全名单 VFX 跑帧数，默认 `3`，启动器提供 `1/3/6/12`；小刀/匕首 VFX 会使用更高下限。
    - `preload_vfx_retain_cache_enabled`：保留已预热 VFX 场景缓存，默认 `false`；开启后与缓存保护配合减少战斗中重复首次实例化。
-   - `preload_combat_animation_warmup_mode`：战斗动画预热，默认 `off`；当前房间实际出场的角色逐个创建独立原生 `SpineSprite` 副本，用 `Duplicate(0)` 排除脚本、信号连接、分组及场景重实例化，进树前移除子节点以避免附带音频/粒子自动播放。`safe` 只采样按名称筛选的安全 clip；`all` 采样全部可用 clip，每个角色最多 128 项。副本在临时全屏遮罩后绘制并及时释放，不修改活体角色 animation state、不调用 `SetAnimationTrigger()`、不执行状态图条件或游戏事件回调；Spine API 不支持时跳过该角色，不回落到活体预热。代价是 trigger 附带的 VFX/音效不再由动画预热覆盖；独立命中特效选项保持原行为。
+   - `preload_combat_animation_warmup_mode`：战斗动画预热，默认 `off`；当前房间实际出场的角色逐个通过 `ClassDB.Instantiate("SpineSprite")` 构造独立原生预览，复用只读 skeleton data/material，复制当前 skin 的 attachment map 与必要渲染属性，由 Spine 自己创建、持有并释放 skeleton、animation state 和网格子节点。不使用 `Duplicate()`，不复制角色脚本、信号连接、音频或粒子子树，也不逐个移除/释放 Spine 的网格子节点。`safe` 只采样按名称筛选的安全 clip；`all` 采样全部可用 clip，每个角色最多 128 项。预览在临时全屏遮罩后绘制，只在 Godot 主线程调用原生 API；临时 Variant/binding 当场释放，预览退出树时先释放其专属 binding 并阻止后续采样，最终只释放预览根节点。不 Dispose 活体角色或共享资源的借用 binding，不修改活体角色 animation state、不调用 `SetAnimationTrigger()`、不执行状态图条件或游戏事件回调；Spine API 不支持时跳过该角色，不回落到活体预热。代价是 trigger 附带的 VFX/音效不由动画预热覆盖；独立命中特效选项及两个选项的默认值保持不变。
    - `preload_combat_animation_warmup_frames`：每个独立 Spine clip 的采样帧数，默认 `1`，启动器提供 `1/2/3/6`；只处理当前战斗房间，不在启动页实例化全游戏所有怪物。
    - `preload_combat_hit_effect_warmup_enabled`：战斗命中特效预热，默认 `false`；开启后在当前战斗房间遮罩后走真实命中渲染路径，实例化伤害数字、命中火花、斩击/钝击 VFX，并以 0 音量触发当前怪物和常见敌人受击 FMOD 事件来预热 sample data，不会改血量、出牌或战斗历史。
    - `preload_combat_code_enabled`：额外预热攻击/伤害/VFX 托管方法，默认 `false`。
@@ -255,6 +267,17 @@ STS2Mobile.ModEntry
    Android 附加设置页在顶部“系统”分区的系统卡片中显示 `preload_enabled` 总开关、预加载下方的 `android_display_refresh_rate_mode` 三挡单选（默认高刷 / 请求 60Hz / 跟随系统），以及默认关闭的性能 overlay 开关；游戏内 Android 设置也提供同一刷新率选择，写回后通过 Java bridge 立即更新当前游戏 Activity 的请求。预加载右侧箭头打开预加载详细管理 BottomSheet，默认不会自动展开。总开关开/关只写入自身，不改写上述细分项目；BottomSheet 的“恢复默认”只重置细分项目，不修改 `preload_enabled`。预加载详细 BottomSheet 刚打开时内容区上滑会切到全屏展开，展开后滚动内容区不会下拉关闭，只有顶部手柄接受下拉关闭手势。默认组合保持本次改动前的预加载行为，不额外启用 VFX/菜单/shader/code/gameplay warmup，但会保留保护已预热缓存与学习漏载资源。
    缩放事件订阅随场景节点 `TreeExiting` 立即解除、重新进树恢复，重复 Ready 不叠加，避免旧房间、事件布局和主菜单被静态事件长期持有。资源释放仍保留 disposal guard，不新增强制 GC 或提前 Dispose；事件初始化也不新增吞异常或“假成功”兜底。
    `AndroidParticlePreprocessPatches` 只在背景初始化后处理已知瀑布巨人/欧罗巴斯背景中的标准持续环境粒子：preprocess 超过两个寿命周期时缩为一个完整周期加原相位余数，不改 amount/material/lifetime/speed。爆发型、一次性、拖尾、sub-emitter、未知材质和本来不超过两周期的粒子不改；因此欧罗巴斯长寿命星点和爆发型特效并不因这个补丁被截短。这是减少首次背景预模拟负担的有限修正，不代表已确认具体闪退或卡死的根因。合成边界回归：`port-mod/tools/test-resource-safety.sh`。
+
+   独立 Spine 预览的原生回归位于 `port-mod/tests/SpineWarmup.Tests`，使用官方 Godot 4.5.1 .NET、.NET 9 SDK 和另行获取的官方 [Spine 4.2 GDExtension](https://esotericsoftware.com/spine-godot)；原生库受 [Spine Runtimes License](https://esotericsoftware.com/spine-runtimes-license) 约束，仅放在 ignored 路径，不随测试源码提交，不新增 APK 依赖。fixture 的 skeleton/atlas 为手写合成数据，纹理由测试生成，不需要商业游戏资源。Linux 无桌面时安装 Xvfb/Mesa 后在仓库根运行：
+
+   ```bash
+   GODOT=/path/to/Godot_v4.5.1-stable_mono_linux.x86_64 \
+   DOTNET=/path/to/dotnet9/dotnet \
+   SPINE_EXTENSION_DIR=/path/to/official-spine-extension/bin \
+   bash port-mod/tests/SpineWarmup.Tests/run-native.sh
+   ```
+
+   runner 先构建并导入，再通过真实 OpenGL 窗口/Xvfb 验证网格像素、动画位移、组合 skin 隔离、原角色状态/音频/粒子不变、重复创建销毁、临时 wrapper 连接回收、离房中断和迟到 GC；实际回归不能用 `--headless` 代替。桌面原生回归不等同于 Android/Adreno 真机战斗验证；仍需在目标设备上分别检查动画预热与命中特效预热的组合。
 
    兼容层的通用/主菜单资源、学习缓存/实战补全资源与 VFX 启动预热已恢复为引入后台加载之前的同步路径：在 Godot 主线程调用 `ResourceLoader.Load`，通用资源和 warm cache 每处理 8 项让出一帧，VFX 每项加载、实例化和释放后让帧；开启实际播放预热时仍等待既定渲染帧数。保留原有 `Reuse` / `Ignore` 缓存语义、预加载范围、缓存保护和全部设置，不再通过共用的 `_loading` 标志等待后台请求。单个同步加载仍可能暂时阻塞主线程，分批让帧不是硬实时保证。此回退只改变启动预热，不撤销下面原版 `AssetLoadingSession` 的异步加载及其协作帧预算，也不撤销 Shader 节点处理优化。
 
@@ -318,13 +341,25 @@ OS.GetDataDir()/port_compat.pck
 - 缓存材质不依赖 NodeAdded 猜测：`NCard.Reload` 专门修复卡面 portrait/canvas-group blur，`NMainMenu._Ready` 修复主菜单 blur，`NEpochSlot._Ready` 修复时间线 blur，`NRadialBlurVfx._Ready` 修复径向 blur；`AssetCache.GetMaterial()` 对已知卡面 blur material 路径也返回替换材质的副本。
 - 这些已知动态路径写回的是替代 `ShaderMaterial` 副本，而不是把原始共享材质换成新 shader；当前没有覆盖任意晚到 `CanvasItem.Material` 赋值的通用 helper。若后续集成 owner 暴露专用更新入口，调用方必须沿用这条替代材质路径；本兼容层当前不对不存在的 helper 或自动重写能力作承诺。
 
+**Maleoon OpenGL 回能粒子兼容**
+
+`shader_compatibility_mode` 同时控制一项定向粒子降级：只有 **Android + 实际 `gl_compatibility` 渲染后端 + GPU 名称包含 Maleoon** 时生效。判断使用 `RenderingServer.GetCurrentRenderingMethod()`，不按手机品牌或项目里请求的 Vulkan 设置猜测；非 Maleoon、Vulkan、iOS 和 offline bootstrap 不应用此降级。
+
+- 在 `NEnergyCounter.Create()` 返回、场景首次进树前，核对原版铁甲能量计、`EnergyVfxFront` 和 `vfx_fire_embers_straight` 的完整场景路径，并要求其使用该 front 场景内嵌的 `ParticleProcessMaterial`、原版 one-shot 形状且没有自定义粒子脚本。MOD 场景和外部 MOD 材质不接管。
+- 为这一条发射器浅复制材质，只设置 `TurbulenceEnabled=false`；共享原材质及其曲线/纹理不修改，也不深复制。噪声强度设为零不等同于关闭该 shader 特性。
+- 保留粒子数量、颜色、寿命、发射形状、原版 `Restart()` 与回能时序，其他回能火焰/光环和战斗逻辑不变。视觉代价仅为这层火星不再做 turbulence 扰动，不是停用整个 VFX 或全局关闭 GPU 粒子。
+- 开关运行时开启时也会检查现有的已知能量计；已经降级的副本不会重复复制。关闭后不再处理新实例，已写入的副本沿用本节 shader variants 的重启恢复规则。
+- 命中时每进程记录一次 `Shader compatibility Maleoon energy embers: turbulence disabled on per-instance material`，同时记录实际 adapter 和 renderer。该窄范围规避仍需要 Maleoon 真机的首战、后续回能和重新启动验证，不代表所有首战/首击卡死已解决。
+
+原生回归 `port-mod/tests/FramePreparation.Tests` 覆盖首次进树前处理、平台/GPU/渲染器/开关边界、材质隔离、MOD 排除、原版 `Restart()` 和重复设置应用。桌面 OpenGL 回归不替代华为驱动验证。
+
 古卡（先古卡）遮罩使用的 `res://shaders/blur/canvas_group_mask_blur.gdshader` 明确排除在替换表之外；overlay 不提供、不预加载 `canvas_group_mask_blur` 的移动 variant，因此该遮罩继续使用原版 shader。这个排除不妨碍上面的 `NCard.Reload` 专用路径修复其它卡面 blur 缓存材质。
 
 `TransitionMaterialPatches` 会在 `NTransition._Ready` 后复制场景默认 `ShaderMaterial`，并在原版 `AssetCache.GetMaterial()` 返回 `fade_transition_mat.tres` / `fight_transition_mat.tres` 时返回缓存材质的副本。全局 disposal guard 已阻止 cache cleanup 显式释放资源；该补丁仍作为纵深保护，隔离 transition tween 对共享材质状态的修改并兼容旧兼容包行为。
 
 `v0.107.0-beta`、`v0.107.1`、`v0.108.0`、共享 `v0.109.x` / `v0.110.x` 与独立 `v0.111.0` target 的 `MapDrawingSceneCachePatches` 同样作为资源 owner 纵深保护：它拦截 `NMapDrawings.CreateLineForPlayer()`，让地图画笔绘制/橡皮线条从 Android 兼容层自持有的 `PackedScene` 实例化，避免长期字段依赖已经离开 cache 索引的场景；橡皮线条会同步刷新 `_eraserMaterial`，保留原版保存时通过材质判断 eraser line 的行为。
 
-关闭 `shader_compatibility_mode` 时会退订节点监听并停止后续替换，但已经写入节点或缓存字段的替换材质不会反向恢复为原版；要还原本进程中已替换的材质，必须退出并重启游戏。重启后开关关闭的进程才不会重新应用这些 shader variants。
+关闭 `shader_compatibility_mode` 时会退订节点监听并停止后续替换，但已经写入节点或缓存字段的替换材质（包括上述粒子材质副本）不会反向恢复为原版；要还原本进程中已替换的材质，必须退出并重启游戏。重启后开关关闭的进程才不会重新应用这些 shader variants 或粒子降级。
 
 ## 10. 普通用户 MOD 加载
 
