@@ -1,0 +1,7 @@
+# 游戏本体、工具链与本机产物不入库（各子项目另有自己的 .gitignore）
+*.zip
+android-tools/
+ipad-tools/toolchain/
+ipad-tools/*.log
+ipad-tools/device-*
+.DS_Store

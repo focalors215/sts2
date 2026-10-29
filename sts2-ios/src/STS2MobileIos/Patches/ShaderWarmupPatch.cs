@@ -8,18 +8,23 @@ using Godot;
 
 namespace STS2MobileIos.Patches;
 
-// 首次启动预编译全部着色器,消除游戏中"遇到新画面时现场编译"的卡顿。
+// Optional standalone-material warmup. Disabled during normal play.
+// Never load full PackedScenes here: that causes severe iPad stutter.
+// Create user://shader_warmup_on before launch to explicitly request warmup.
 // 移植自安卓 ShaderWarmupScreen,但做了三处 iOS 适配:
 //  1. 不继承 Node/Control —— 本补丁在独立 assembly(STS2MobileIos),不在 Godot 主 assembly
 //     的脚本注册表里,做成 Godot 节点其生命周期回调不会触发。改为纯静态逻辑 + SceneTree 信号驱动。
-//  2. 去掉全部 UI(进度条/面板依赖 Launcher.Components),改用 PatchHelper.Log 输出进度。
-//  3. 触发点: postfix NGame._EnterTree(游戏根节点进树,SceneTree+资源系统就绪),async 后台跑,
-//     不阻塞(安卓是阻塞式预热屏,我们无 Launcher,改后台;首次会卡一阵,写 marker 后永久跳过)。
+//  2. 使用普通 Godot 控件显示可取消进度，无脚本注册或外部 UI 依赖。
+//  3. 触发点: postfix NGame._EnterTree；只有显式开启时运行。
+//     async 让帧不等于后台线程，单个资源仍同步加载，请勿在正常对局中开启。
 public static class ShaderWarmupPatch
 {
-    private const int WarmupVersion = 5;
+    private const int WarmupVersion = 6;
+    private static Label _progress;
+    private static bool _cancelled;
     private const int BatchSize = 8;
     private static bool _started = false;
+    private static int _unreadableHeaders;
 
     // postfix on MegaCrit.Sts2.Core.Nodes.NGame._EnterTree
     public static void EnterTreePostfix(Node __instance)
@@ -27,8 +32,14 @@ public static class ShaderWarmupPatch
         if (_started)
             return;
         _started = true;
+        FrameTimingTrace.Attach(__instance.GetTree());
         try
         {
+            if (!File.Exists(Path.Combine(OS.GetUserDataDir(), "shader_warmup_on")))
+            {
+                PatchHelper.Log("[ShaderWarmup] Full scan disabled during normal play");
+                return;
+            }
             if (!NeedsWarmup())
             {
                 PatchHelper.Log("[ShaderWarmup] 已预热过,跳过");
@@ -40,7 +51,7 @@ public static class ShaderWarmupPatch
                 PatchHelper.Log("[ShaderWarmup] SceneTree 不可用,跳过");
                 return;
             }
-            // fire-and-forget 后台预热
+            // Optional cooperative main-thread warmup; not a background worker.
             _ = RunWarmup(tree);
         }
         catch (Exception ex)
@@ -82,8 +93,46 @@ public static class ShaderWarmupPatch
     private static async Task RunWarmup(SceneTree tree)
     {
         var sw = Stopwatch.StartNew();
+        CanvasLayer overlay = null;
+        SubViewport viewport = null;
         try
         {
+            // _EnterTree still locks the root's child list. Wait before adding UI.
+            await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
+            _cancelled = false;
+            overlay = new CanvasLayer { Layer = 1000 };
+            var shade = new ColorRect { Color = new Color(0.03f, 0.04f, 0.07f, 1), MouseFilter = Control.MouseFilterEnum.Stop };
+            shade.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+            overlay.AddChild(shade);
+            _progress = new Label { Text = "正在准备画面…", HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            _progress.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+            _progress.AddThemeFontSizeOverride("font_size", 28);
+            shade.AddChild(_progress);
+            var skip = new Button { Text = "跳过（首次特效可能短暂停顿）" };
+            skip.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.CenterBottom);
+            skip.Position = new Vector2(-250, -100);
+            skip.Size = new Vector2(500, 60);
+            skip.AddThemeFontSizeOverride("font_size", 22);
+            skip.Pressed += () => _cancelled = true;
+            shade.AddChild(skip);
+            // This overlay lives outside the game's theme tree. Reuse its CJK
+            // font explicitly so Chinese progress text does not render as boxes.
+            var uiFont = ResourceLoader.Load<Font>("res://themes/fonts/zhs/noto_sans_mono_cjksc_regular_shared.tres");
+            if (uiFont != null)
+            {
+                _progress.AddThemeFontOverride("font", uiFont);
+                skip.AddThemeFontOverride("font", uiFont);
+            }
+            tree.Root.AddChild(overlay);
+            // Resolve layout after entering the tree. CanvasLayer is not a
+            // Control parent, so pre-tree anchors alone leave a zero-size panel.
+            shade.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+            shade.Position = Vector2.Zero;
+            shade.Size = tree.Root.GetVisibleRect().Size;
+            _progress.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+            _progress.Size = shade.Size;
+            skip.Position = new Vector2((shade.Size.X - skip.Size.X) / 2, shade.Size.Y - 100);
+            PatchHelper.Log($"[ShaderWarmup] Preparation panel size={shade.Size}");
             // 等主菜单先加载显示,减少与游戏启动的资源竞争
             for (int f = 0; f < 30; f++)
                 await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
@@ -93,6 +142,7 @@ public static class ShaderWarmupPatch
             );
 
             var materials = await CollectMaterialsAsync(tree);
+            if (_cancelled) return;
             PatchHelper.Log($"[ShaderWarmup] 收集到 {materials.Count} 个待编译着色器");
 
             if (materials.Count == 0)
@@ -101,7 +151,7 @@ public static class ShaderWarmupPatch
                 return;
             }
 
-            var viewport = new SubViewport
+            viewport = new SubViewport
             {
                 Size = new Vector2I(64, 64),
                 RenderTargetUpdateMode = SubViewport.UpdateMode.Always,
@@ -116,6 +166,8 @@ public static class ShaderWarmupPatch
             int total = materials.Count;
             for (int i = 0; i < total; i += BatchSize)
             {
+                if (_cancelled) return;
+                _progress.Text = $"正在准备画面：{i}/{total}";
                 var batchNodes = new List<Node>();
                 int batchEnd = Math.Min(i + BatchSize, total);
                 for (int j = i; j < batchEnd; j++)
@@ -136,7 +188,7 @@ public static class ShaderWarmupPatch
                 }
 
                 await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
-                await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
+                await tree.ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
 
                 foreach (var node in batchNodes)
                     node.QueueFree();
@@ -145,7 +197,7 @@ public static class ShaderWarmupPatch
                     PatchHelper.Log($"[ShaderWarmup] 进度 {batchEnd}/{total}");
             }
 
-            viewport.QueueFree();
+            if (_cancelled) return;
             WriteVersionMarker();
             PatchHelper.Log(
                 $"[ShaderWarmup] 完成: {total} 个着色器,耗时 {sw.ElapsedMilliseconds}ms。下次启动将跳过。"
@@ -154,6 +206,13 @@ public static class ShaderWarmupPatch
         catch (Exception ex)
         {
             PatchHelper.Log($"[ShaderWarmup] 预热失败: {ex}");
+        }
+        finally
+        {
+            viewport?.QueueFree();
+            overlay?.QueueFree();
+            _progress = null;
+            if (_cancelled) PatchHelper.Log("[ShaderWarmup] Cancelled; completion marker unchanged");
         }
     }
 
@@ -170,11 +229,11 @@ public static class ShaderWarmupPatch
                 Texture = whiteTex,
             };
         }
-        return new Sprite2D { Texture = whiteTex, Material = mat };
+        return new Sprite2D { Texture = whiteTex, Material = mat, Position = new Vector2(32, 32), Scale = new Vector2(64, 64) };
     }
 
     // 每加载 N 个资源就让一帧, 防止首次从冷 pck 批量加载时主线程连续卡 >10s 触发看门狗。
-    private const int YieldEvery = 4;
+    private const int YieldEvery = 1;
 
     private static async Task<List<(string path, Material mat)>> CollectMaterialsAsync(
         SceneTree tree
@@ -192,36 +251,18 @@ public static class ShaderWarmupPatch
         PatchHelper.Log($"[ShaderWarmup] 扫描 {matPaths.Count} 个材质/着色器资源");
         for (int i = 0; i < matPaths.Count; i++)
         {
+            if (_cancelled) return unique.Values.ToList();
+            _progress.Text = $"正在读取画面资源：{i + 1}/{matPaths.Count}";
             if (LoadAndAdd(matPaths[i], unique))
                 seen++;
             if (i % YieldEvery == 0)
                 await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
         }
 
-        var scenePaths = new List<string>();
-        CollectScenePaths("res://scenes", scenePaths);
-        PatchHelper.Log($"[ShaderWarmup] 扫描 {scenePaths.Count} 个场景");
-
-        for (int i = 0; i < scenePaths.Count; i++)
-        {
-            try
-            {
-                var packed = ResourceLoader.Load<PackedScene>(
-                    scenePaths[i],
-                    null,
-                    ResourceLoader.CacheMode.Reuse
-                );
-                if (packed != null)
-                    seen += ExtractMaterialsFromSceneState(packed, scenePaths[i], unique);
-            }
-            catch (Exception ex)
-            {
-                PatchHelper.Log($"[ShaderWarmup] 提取场景失败 {scenePaths[i]}: {ex.Message}");
-            }
-            if (i % YieldEvery == 0)
-                await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
-        }
-
+        // Do not load PackedScenes: they pull full atlases, scripts and skeletons
+        // into memory. This pass covers standalone material resources only.
+        if (_unreadableHeaders > 0)
+            PatchHelper.Log($"[ShaderWarmup] {_unreadableHeaders} resources skipped: header unreadable");
         PatchHelper.Log($"[ShaderWarmup] {seen} 个材质 → {unique.Count} 个唯一着色器");
         return unique.Values.ToList();
     }
@@ -304,6 +345,24 @@ public static class ShaderWarmupPatch
         {
             if (!ResourceLoader.Exists(cleanPath))
                 return false;
+            if (cleanPath.EndsWith(".tres"))
+            {
+                // The loader type hint does not filter types. Inspect only the
+                // text header so Spine skeleton/atlas resources are never loaded.
+                using var file = Godot.FileAccess.Open(cleanPath, Godot.FileAccess.ModeFlags.Read);
+                if (file == null)
+                {
+                    // A pack exported with binary resources would silently skip every material.
+                    if (_unreadableHeaders++ == 0)
+                        PatchHelper.Log($"[ShaderWarmup] Cannot read text header of {cleanPath}; such resources are skipped");
+                    return false;
+                }
+                var header = file.GetLine();
+                if (!header.Contains("type=\"ShaderMaterial\"")
+                    && !header.Contains("type=\"ParticleProcessMaterial\"")
+                    && !header.Contains("type=\"CanvasItemMaterial\""))
+                    return false;
+            }
             Material mat = null;
             if (cleanPath.EndsWith(".tres"))
             {

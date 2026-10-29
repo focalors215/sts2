@@ -35,6 +35,8 @@ public static class MobileLayoutPatches
         {
             PatchHelper.Log($"MainMenuReadyPostfix failed: {ex.Message}");
         }
+        // Online room action from the native launcher (create / join room).
+        RemoteRoomPatches.OnMainMenuReady((Node)__instance);
     }
 
     private static void ApplyMainMenuLayout(Node menu)

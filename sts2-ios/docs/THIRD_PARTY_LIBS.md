@@ -11,6 +11,7 @@
 | `libfmod_iphoneos.a` + `libfmodstudio_iphoneos.a` | FMOD Engine（官方 SDK） | **2.03.xx** | 静态链接 |
 | `libGodotFmod.ios.template_release.xcframework` | utopia-rise/fmod-gdextension（自行编译） | 对应 FMOD 2.03 / Godot 4.5.1 | `fmod_library_init` |
 | `libspine_godot.ios.template_release.framework` | EsotericSoftware/spine-runtimes（自行编译） | Spine **4.2** 分支 / Godot 4.5.1 | `spine_godot_library_init` |
+| `prebuilt/frp/libfrpbridge.a`（远程联机） | [fatedier/frp](https://github.com/fatedier/frp)（Apache-2.0），`tools/build-frp-bridge.sh` 用 Go 编译 `src/FrpBridge` | frp **v0.71.1**（`src/FrpBridge/go.mod` 锁定） | `Sts2FrpStart` |
 
 - 前两个放进 `STS2_IOS_LIBS_DIR`（xcframework/framework）与 `STS2_FMOD_STATIC_DIR`（`.a`）。
 - 目录约定见 `ios-export/config.example.sh`。

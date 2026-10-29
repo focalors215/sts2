@@ -1,0 +1,15 @@
+{
+  "dotnet_sdk": "9.0.319",
+  "godot": "4.5.1.stable.mono.official.f62fdbde1",
+  "godot_archive_sha256": "f00ee565e9d3682584117ef8865f5ff6d8f571fbf2733075ee06b9e0953261b8",
+  "godot_templates_sha256": "c425633061bb49f4390bdcece2b9ce68b3b0be3c71095b40644d8f6f17b1146e",
+  "fmod_godot_tag": "6.1.0-4.5.0",
+  "fmod_engine_release_note_version": "2.03.06",
+  "fmod_addons_digest": "sha256:8796f6cd1cb38bf7ff4da2648f8af2695244ffdb80a7ac4ab8a171ca44895713",
+  "fmod_addons_url": "https://github.com/utopia-rise/fmod-gdextension/releases/download/6.1.0-4.5.0/addons.zip",
+  "spine_branch": "4.2",
+  "spine_commit": "e7dc1435fa4a0083ab431f1b28e083c14a1f5c68",
+  "godot_cpp_commit": "27d9dd23c83871e0619fca5dc2cddfbfd69e926a",
+  "system_io_hashing": "9.0.0",
+  "scons": "4.11.1"
+}

@@ -31,6 +31,10 @@
     <Reference Include="$(PrebuiltDir)/deps/*.dll">
       <Private>true</Private>
     </Reference>
+    <!-- Android body ZIPs omit this NuGet assembly because their runtime supplies
+         it. It is not part of the .NET shared framework; NativeAOT still needs
+         the version declared by the v0.111.0 game dependency manifest. -->
+    <PackageReference Include="System.IO.Hashing" Version="9.0.0" />
   </ItemGroup>
 
   <!-- 补丁库需 root(被织入调用点引用+含反射逻辑); sts2 由 Godot targets root -->

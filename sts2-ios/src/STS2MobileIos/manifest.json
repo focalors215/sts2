@@ -258,6 +258,90 @@
       "kind": "postfix",
       "hookType": "STS2MobileIos.Patches.CardAdvisorPatch",
       "hookMethod": "OverlayPushPostfix"
+    },
+    {
+      "targetType": "MegaCrit.Sts2.Core.Platform.Null.NullPlatformUtilStrategy",
+      "targetMethod": "GetLocalPlayerId",
+      "kind": "prefix",
+      "hookType": "STS2MobileIos.Patches.LanMultiplayerPatches",
+      "hookMethod": "LocalPlayerIdPrefix"
+    },
+    {
+      "targetType": "MegaCrit.Sts2.Core.Platform.Null.NullPlatformUtilStrategy",
+      "targetMethod": "GetPlayerName",
+      "kind": "prefix",
+      "hookType": "STS2MobileIos.Patches.LanMultiplayerPatches",
+      "hookMethod": "PlayerNamePrefix"
+    },
+    {
+      "targetType": "MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NMultiplayerHostSubmenu",
+      "targetMethod": "StartHostAsync",
+      "kind": "prefix",
+      "hookType": "STS2MobileIos.Patches.LanMultiplayerPatches",
+      "hookMethod": "HostPrefix"
+    },
+    {
+      "targetType": "MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NMultiplayerSubmenu",
+      "targetMethod": "StartHostAsync",
+      "kind": "prefix",
+      "hookType": "STS2MobileIos.Patches.LanMultiplayerPatches",
+      "hookMethod": "LoadedHostPrefix"
+    },
+    {
+      "targetType": "MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NJoinFriendScreen",
+      "targetMethod": "OnSubmenuOpened",
+      "kind": "prefix",
+      "hookType": "STS2MobileIos.Patches.LanMultiplayerPatches",
+      "hookMethod": "JoinOpenedPrefix"
+    },
+    {
+      "targetType": "MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NJoinFriendScreen",
+      "targetMethod": "RefreshButtonClicked",
+      "kind": "prefix",
+      "hookType": "STS2MobileIos.Patches.LanMultiplayerPatches",
+      "hookMethod": "JoinRefreshPrefix"
+    },
+    {
+      "targetType": "MegaCrit.Sts2.Core.Saves.UserDataPathProvider",
+      "targetMethod": "GetAccountScopedBasePath",
+      "kind": "prefix",
+      "hookType": "STS2MobileIos.Patches.LanMultiplayerPatches",
+      "hookMethod": "SaveAccountPrefix"
+    },
+    {
+      "targetType": "MegaCrit.Sts2.Core.Saves.UserDataPathProvider",
+      "targetMethod": "GetProfileScopedBasePath",
+      "kind": "prefix",
+      "hookType": "STS2MobileIos.Patches.LanMultiplayerPatches",
+      "hookMethod": "SaveAccountPrefix"
+    },
+    {
+      "targetType": "MegaCrit.Sts2.Core.Saves.UserDataPathProvider",
+      "targetMethod": "GetProfileScopedPath",
+      "kind": "prefix",
+      "hookType": "STS2MobileIos.Patches.LanMultiplayerPatches",
+      "hookMethod": "SaveAccountPrefix"
+    },
+    {
+      "targetType": "MegaCrit.Sts2.Core.Saves.Managers.RunSaveManager",
+      "targetMethod": "LoadAndCanonicalizeMultiplayerRunSave",
+      "kind": "prefix",
+      "hookType": "STS2MobileIos.Patches.LanMultiplayerPatches",
+      "hookMethod": "CanonicalizePrefix"
+    },
+    {
+      "targetType": "MegaCrit.Sts2.Core.Nodes.NGame",
+      "targetMethod": "_EnterTree",
+      "kind": "prefix",
+      "hookType": "STS2MobileIos.Patches.ResourcePackPatches",
+      "hookMethod": "EnterTreePrefix"
+    },
+    {
+      "targetType": "MegaCrit.Sts2.Core.Multiplayer.PeerVersionInfo",
+      "targetMethod": "LocalDefault",
+      "kind": "postfix",
+      "hookType": "STS2MobileIos.Patches.ResourcePackPatches",
+      "hookMethod": "LocalDefaultPostfix"
     }
   ]
 }

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "buildId": "sts2-ios-v0.111.0-more-silent-0.1.33-r1",
+  "mods": [
+    {
+      "modId": "MoreSilentAnimations",
+      "feature": "more-silent-animations-v0.1.33",
+      "sourceSha256": "1a86d4bfb5aa9260bf3f22e188dd50d43b9c2aca39929a20fcc3d2c315956e41",
+      "gameVersion": "v0.111.0",
+      "version": "0.1.33",
+      "files": [
+        {
+          "path": "managed/MoreSilentAnimations.dll",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "size": 12345
+        }
+      ]
+    }
+  ]
+}
