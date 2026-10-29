@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="cottage_theme_name">喵喵零和小鱼的小屋</string>
+    <string name="cottage_nav_home">回到小屋</string>
+    <string name="cottage_nav_dashboard">游戏管理</string>
+    <string name="cottage_nav_mods">本地 MOD</string>
+    <string name="cottage_nav_versions">版本管理</string>
+    <string name="cottage_nav_settings">设置</string>
+    <string name="cottage_nav_about">关于</string>
+    <string name="cottage_tab_home">小屋</string>
+    <string name="cottage_tab_mods">MOD</string>
+    <string name="cottage_tab_versions">版本</string>
+    <string name="cottage_tab_settings">设置</string>
+    <string name="cottage_tab_about">关于</string>
+    <string-array name="cottage_hotspot_labels">
+        <item>存档管理</item>
+        <item>本地 MOD</item>
+        <item>联机小屋</item>
+        <item>设置</item>
+        <item>开始游戏</item>
+    </string-array>
+    <string name="cottage_postcard_description">喵喵零和小鱼盖着毯子看书</string>
+    <string name="cottage_hero_subtitle">杀戮尖塔 2 · 今天也一起爬塔喵～</string>
+    <string name="cottage_start_game">进屋开玩</string>
+    <string name="cottage_status_missing_payload">尚未导入游戏本体，点这里导入</string>
+    <string name="cottage_tagline_dashboard">今天也一起爬塔喵～</string>
+    <string name="cottage_tagline_mods">给小屋添点新花样</string>
+    <string name="cottage_tagline_versions">整理小屋的书架</string>
+    <string name="cottage_tagline_settings">小屋的小角落</string>
+    <string name="cottage_tagline_about">关于这间小屋</string>
+</resources>

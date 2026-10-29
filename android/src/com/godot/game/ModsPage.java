@@ -170,7 +170,7 @@ public final class ModsPage {
 
 	public View build() {
 		FrameLayout frame = new FrameLayout(context);
-		frame.setBackgroundColor(ExtraSettingsUi.COLOR_BACKGROUND);
+		frame.setBackgroundColor(ExtraSettingsUi.COLOR_PAGE_BACKGROUND);
 
 		LinearLayout column = ExtraSettingsUi.vertical(context);
 		column.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -215,9 +215,7 @@ public final class ModsPage {
 
 		LinearLayout titleCluster = ExtraSettingsUi.horizontal(context);
 		titleCluster.setGravity(Gravity.CENTER_VERTICAL);
-		TextView title = ExtraSettingsUi.text(context, context.getString(R.string.tab_mods), 22, ExtraSettingsUi.COLOR_ON_SURFACE, Typeface.BOLD);
-		title.setSingleLine(true);
-		title.setEllipsize(TextUtils.TruncateAt.END);
+		View title = CottageTheme.pageTitle(context, context.getString(R.string.cottage_nav_mods), context.getString(R.string.cottage_tagline_mods));
 		titleCluster.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
 		LinearLayout warningChip = ExtraSettingsUi.horizontal(context);
@@ -282,7 +280,7 @@ public final class ModsPage {
 	private View buildCompactActions() {
 		LinearLayout section = ExtraSettingsUi.vertical(context);
 		section.setPadding(ExtraSettingsUi.dp(context, 16), 0, ExtraSettingsUi.dp(context, 16), ExtraSettingsUi.dp(context, 12));
-		section.setBackgroundColor(ExtraSettingsUi.COLOR_BACKGROUND);
+		section.setBackgroundColor(ExtraSettingsUi.COLOR_PAGE_BACKGROUND);
 
 		LinearLayout searchBar = ExtraSettingsUi.horizontal(context);
 		searchBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -352,7 +350,7 @@ public final class ModsPage {
 		});
 
 		View divider = new View(context);
-		divider.setBackgroundColor(Color.rgb(68, 71, 78));
+		divider.setBackgroundColor(ExtraSettingsUi.COLOR_OUTLINE);
 		LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ExtraSettingsUi.dp(context, 1));
 		dividerParams.topMargin = ExtraSettingsUi.dp(context, 12);
 		section.addView(divider, dividerParams);
@@ -393,7 +391,7 @@ public final class ModsPage {
 		chip.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
 		chip.setTextColor(ExtraSettingsUi.COLOR_ON_SURFACE_VARIANT);
 		chip.setBackgroundTintList(ColorStateList.valueOf(ExtraSettingsUi.COLOR_SECONDARY_CONTAINER));
-		chip.setRippleColor(ColorStateList.valueOf(Color.argb(72, 201, 238, 211)));
+		chip.setRippleColor(ColorStateList.valueOf(CottageTheme.RIPPLE));
 		chip.setShapeAppearanceModel(ShapeAppearanceModel.builder().setAllCornerSizes(ExtraSettingsUi.dp(context, 8)).build());
 		chip.setMinHeight(0);
 		chip.setMinWidth(0);
@@ -2690,14 +2688,14 @@ public final class ModsPage {
 		int background;
 		int border;
 		if (selected) {
-			background = Color.rgb(30, 50, 39);
+			background = CottageTheme.SELECTED_CARD;
 			border = ExtraSettingsUi.COLOR_PRIMARY;
 		} else if (hasIssues) {
 			background = Color.rgb(48, 40, 24);
 			border = ExtraSettingsUi.COLOR_WARNING;
 		} else {
 			background = ExtraSettingsUi.COLOR_SURFACE_CONTAINER;
-			border = enabled ? Color.rgb(72, 104, 84) : ExtraSettingsUi.COLOR_OUTLINE;
+			border = enabled ? CottageTheme.SELECTED_BORDER : ExtraSettingsUi.COLOR_OUTLINE;
 		}
 		card.setCardBackgroundColor(background);
 		card.setStrokeWidth(ExtraSettingsUi.dp(context, selected || hasIssues ? 2 : 1));

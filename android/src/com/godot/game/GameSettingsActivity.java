@@ -27,10 +27,7 @@ import android.widget.TextView;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
-import com.google.android.material.bottomnavigation.BottomNavigationView;
 import com.google.android.material.bottomsheet.BottomSheetDialog;
-import com.google.android.material.navigation.NavigationBarView;
-import com.google.android.material.navigationrail.NavigationRailView;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.checkbox.MaterialCheckBox;
@@ -67,8 +64,10 @@ public class GameSettingsActivity extends AppCompatActivity implements ExtraSett
 	private GameBodyVersionManager gameBodyVersionManager;
 	private LaunchProfileManager launchProfileManager;
 	private FrameLayout contentFrame;
-	private BottomNavigationView bottomNavigationView;
-	private NavigationRailView navigationRailView;
+	private LinearLayout shellLayout;
+	private CottageHomeStage homeStage;
+	private View[] shellBackdrop = new View[0];
+	private final List<View> navButtons = new ArrayList<>();
 	private boolean busy;
 	private boolean launchUpdateCheckRequested;
 	private boolean bundledPayloadAutoExtractRequested;
@@ -151,92 +150,208 @@ public class GameSettingsActivity extends AppCompatActivity implements ExtraSett
 				showMainShell();
 			}
 		});
-		setContentView(page.build());
+		setContentView(withCottageBackdrop(page.build()));
+	}
+
+	/** 首次向导等独立页面也叠在模糊压暗的小屋插画上。 */
+	private View withCottageBackdrop(View page) {
+		FrameLayout root = new FrameLayout(this);
+		root.setBackgroundColor(CottageTheme.BACKGROUND);
+		ImageView blurredArt = new ImageView(this);
+		blurredArt.setImageBitmap(CottageTheme.blurredArt(this));
+		blurredArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
+		blurredArt.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+		root.addView(blurredArt, CottageTheme.fill());
+		View dim = new View(this);
+		dim.setBackgroundColor(CottageTheme.DIM);
+		root.addView(dim, CottageTheme.fill());
+		root.addView(page, CottageTheme.fill());
+		return root;
 	}
 
 	private void showMainShell() {
+		// 主题：喵喵零和小鱼的小屋（与 iPad 启动器同一套布局）。宽屏为左侧插画侧栏 + 内容，
+		// 「回到小屋」显示整幅插画主页；窄屏为顶部标签 + 内容。子页面背景是模糊压暗的同一张插画。
 		boolean wideLayout = ExtraSettingsUi.isWideLayout(this);
-		LinearLayout shell = new LinearLayout(this);
-		shell.setOrientation(wideLayout ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
-		shell.setBackgroundColor(ExtraSettingsUi.COLOR_BACKGROUND);
+		shellLayout = new LinearLayout(this);
+		shellLayout.setOrientation(wideLayout ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
+		FrameLayout root = (FrameLayout)withCottageBackdrop(shellLayout);
 
 		contentFrame = new FrameLayout(this);
-		SystemBarInsetsHelper.applySystemBarPadding(contentFrame, false, true, false, true);
-		bottomNavigationView = null;
-		navigationRailView = null;
+		// 页面自己处理顶部状态栏；外壳已经让开的边不再传给页面，避免重复留白。
+		final boolean padTopInShell = !wideLayout;
+		androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(contentFrame, (view, insets) -> {
+			int mask = androidx.core.view.WindowInsetsCompat.Type.systemBars() | androidx.core.view.WindowInsetsCompat.Type.displayCutout();
+			androidx.core.graphics.Insets bars = insets.getInsets(mask);
+			view.setPadding(wideLayout ? 0 : bars.left, 0, bars.right, 0);
+			androidx.core.graphics.Insets remaining = androidx.core.graphics.Insets.of(0, padTopInShell ? 0 : bars.top, 0, bars.bottom);
+			return new androidx.core.view.WindowInsetsCompat.Builder(insets)
+				.setInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars(), remaining)
+				.setInsets(androidx.core.view.WindowInsetsCompat.Type.displayCutout(), androidx.core.graphics.Insets.NONE)
+				.build();
+		});
+		navButtons.clear();
 		if (wideLayout) {
-			navigationRailView = new NavigationRailView(this);
-			navigationRailView.inflateMenu(R.menu.menu_extra_settings_nav);
-			configureNavigationBar(navigationRailView, ExtraSettingsUi.dp(this, 72));
-			navigationRailView.setLabelVisibilityMode(NavigationBarView.LABEL_VISIBILITY_LABELED);
-			navigationRailView.setItemMinimumHeight(ExtraSettingsUi.dp(this, 64));
-			navigationRailView.setPadding(0, ExtraSettingsUi.dp(this, 12), 0, ExtraSettingsUi.dp(this, 12));
-			SystemBarInsetsHelper.applySystemBarPadding(navigationRailView, true, false, true, false);
-			shell.addView(navigationRailView, new LinearLayout.LayoutParams(ExtraSettingsUi.dp(this, 96), ViewGroup.LayoutParams.MATCH_PARENT));
-			shell.addView(contentFrame, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+			ScrollView sidebarScroll = new ScrollView(this);
+			sidebarScroll.setVerticalScrollBarEnabled(false);
+			LinearLayout sidebar = ExtraSettingsUi.vertical(this);
+			int pad = ExtraSettingsUi.dp(this, 16);
+			sidebar.setPadding(pad, pad, 0, pad);
+			// 系统栏/挖孔边距加在外层滚动容器上，侧栏内容本身保持固定宽度。
+			SystemBarInsetsHelper.applySystemBarPadding(sidebarScroll, true, false, true, true);
+			sidebar.addView(CottageTheme.artCard(this, CottageTheme.BRAND_RECT, getString(R.string.cottage_theme_name)), sidebarItemParams(0));
+			addNavButton(sidebar, R.id.nav_game, R.string.cottage_nav_home, "home");
+			addNavButton(sidebar, R.id.nav_dashboard, R.string.cottage_nav_dashboard, "stadia_controller");
+			addNavButton(sidebar, R.id.nav_mods, R.string.cottage_nav_mods, "extension");
+			addNavButton(sidebar, R.id.nav_versions, R.string.cottage_nav_versions, "layers");
+			addNavButton(sidebar, R.id.nav_settings, R.string.cottage_nav_settings, "settings");
+			addNavButton(sidebar, R.id.nav_about, R.string.cottage_nav_about, "info");
+			if (getResources().getConfiguration().screenHeightDp >= 650) {
+				sidebar.addView(CottageTheme.artCard(this, CottageTheme.POSTCARD_RECT, getString(R.string.cottage_postcard_description)), sidebarItemParams(12));
+			}
+			sidebarScroll.addView(sidebar, new ScrollView.LayoutParams(ExtraSettingsUi.dp(this, 236), ViewGroup.LayoutParams.WRAP_CONTENT));
+			shellLayout.addView(sidebarScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+			LinearLayout.LayoutParams contentParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
+			shellLayout.addView(contentFrame, contentParams);
 		} else {
-			shell.addView(contentFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-			bottomNavigationView = new BottomNavigationView(this);
-			bottomNavigationView.inflateMenu(R.menu.menu_extra_settings_nav);
-			configureNavigationBar(bottomNavigationView, ExtraSettingsUi.dp(this, 64));
-			bottomNavigationView.setLabelVisibilityMode(NavigationBarView.LABEL_VISIBILITY_LABELED);
-			SystemBarInsetsHelper.applySystemBarPadding(bottomNavigationView, false, false, true, false);
-			shell.addView(bottomNavigationView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+			LinearLayout tabs = ExtraSettingsUi.horizontal(this);
+			int pad = ExtraSettingsUi.dp(this, 4);
+			tabs.setPadding(pad, pad, pad, pad);
+			GradientDrawable tabsBackground = new GradientDrawable();
+			tabsBackground.setColor(CottageTheme.CARD);
+			tabsBackground.setStroke(ExtraSettingsUi.dp(this, 1.5f), CottageTheme.OUTLINE);
+			tabsBackground.setCornerRadius(ExtraSettingsUi.dp(this, 14));
+			tabs.setBackground(tabsBackground);
+			addTab(tabs, R.id.nav_game, R.string.cottage_tab_home);
+			addTab(tabs, R.id.nav_mods, R.string.cottage_tab_mods);
+			addTab(tabs, R.id.nav_versions, R.string.cottage_tab_versions);
+			addTab(tabs, R.id.nav_settings, R.string.cottage_tab_settings);
+			addTab(tabs, R.id.nav_about, R.string.cottage_tab_about);
+			FrameLayout tabsHolder = new FrameLayout(this);
+			int holderPad = ExtraSettingsUi.dp(this, 16);
+			tabsHolder.setPadding(holderPad, ExtraSettingsUi.dp(this, 10), holderPad, ExtraSettingsUi.dp(this, 4));
+			SystemBarInsetsHelper.applySystemBarPadding(tabsHolder, true, true, false, true);
+			tabsHolder.addView(tabs, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ExtraSettingsUi.dp(this, 48)));
+			shellLayout.addView(tabsHolder, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+			shellLayout.addView(contentFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 		}
 
-		setContentView(shell);
+		homeStage = new CottageHomeStage(this, new CottageHomeStage.Listener() {
+			@Override
+			public void onHotspot(int hotspot) {
+				onHomeHotspot(hotspot);
+			}
+
+			@Override
+			public void onStatusTapped() {
+				if (!busy) {
+					requestImportGamePayload();
+				}
+			}
+		});
+		root.addView(homeStage, CottageTheme.fill());
+		shellBackdrop = new View[] { root.getChildAt(0), root.getChildAt(1) };
+
+		setContentView(root);
 		int savedTab = ExtraSettingsPreferences.getLastSelectedMainTab(this, R.id.nav_game);
-		if (savedTab != R.id.nav_game && savedTab != R.id.nav_mods && savedTab != R.id.nav_versions && savedTab != R.id.nav_settings && savedTab != R.id.nav_about) {
+		if (savedTab != R.id.nav_game && savedTab != R.id.nav_dashboard && savedTab != R.id.nav_mods && savedTab != R.id.nav_versions && savedTab != R.id.nav_settings && savedTab != R.id.nav_about) {
 			savedTab = R.id.nav_game;
 		}
-		selectNavigationItem(savedTab);
+		if (savedTab == R.id.nav_dashboard && !wideLayout) {
+			savedTab = R.id.nav_game;
+		}
 		openTab(savedTab);
 		maybeRunLaunchUpdateCheck();
 		maybeAutoExtractBundledPayload();
 		maybeRunCleanExitSteamCloudPush();
 	}
 
-	private void configureNavigationBar(NavigationBarView navigationBar, int activeIndicatorWidth) {
-		navigationBar.setBackgroundColor(Color.rgb(30, 35, 31));
-		ColorStateList itemIconColors = new ColorStateList(
-			new int[][] { new int[] { android.R.attr.state_checked }, new int[] {} },
-			new int[] { Color.rgb(207, 233, 214), Color.rgb(193, 201, 193) }
-		);
-		ColorStateList itemTextColors = new ColorStateList(
-			new int[][] { new int[] { android.R.attr.state_checked }, new int[] {} },
-			new int[] { Color.rgb(225, 227, 223), Color.rgb(193, 201, 193) }
-		);
-		navigationBar.getMenu().findItem(R.id.nav_game).setIcon(MaterialSymbols.drawable(this, "stadia_controller", itemIconColors, 24));
-		navigationBar.getMenu().findItem(R.id.nav_mods).setIcon(MaterialSymbols.drawable(this, "extension", itemIconColors, 24));
-		navigationBar.getMenu().findItem(R.id.nav_versions).setIcon(MaterialSymbols.drawable(this, "layers", itemIconColors, 24));
-		navigationBar.getMenu().findItem(R.id.nav_settings).setIcon(MaterialSymbols.drawable(this, "settings", itemIconColors, 24));
-		navigationBar.getMenu().findItem(R.id.nav_about).setIcon(MaterialSymbols.drawable(this, "info", itemIconColors, 24));
-		navigationBar.setItemIconTintList(itemIconColors);
-		navigationBar.setItemTextColor(itemTextColors);
-		navigationBar.setItemRippleColor(ColorStateList.valueOf(Color.argb(72, 129, 217, 154)));
-		navigationBar.setItemActiveIndicatorEnabled(true);
-		navigationBar.setItemActiveIndicatorColor(ColorStateList.valueOf(Color.rgb(51, 75, 59)));
-		navigationBar.setItemActiveIndicatorWidth(activeIndicatorWidth);
-		navigationBar.setItemActiveIndicatorHeight(ExtraSettingsUi.dp(this, 32));
-		navigationBar.setItemActiveIndicatorShapeAppearance(
-			com.google.android.material.shape.ShapeAppearanceModel.builder()
-				.setAllCornerSizes(ExtraSettingsUi.dp(this, 16))
-				.build()
-		);
-		navigationBar.setItemTextAppearanceActiveBoldEnabled(true);
-		navigationBar.setOnItemSelectedListener(item -> {
-			openTab(item.getItemId());
-			return true;
-		});
+	private LinearLayout.LayoutParams sidebarItemParams(int topMarginDp) {
+		LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+		params.topMargin = ExtraSettingsUi.dp(this, topMarginDp);
+		return params;
+	}
+
+	private void addNavButton(LinearLayout sidebar, int itemId, int titleRes, String glyph) {
+		MaterialButton button = CottageTheme.navButton(this, getString(titleRes), glyph, false);
+		button.setId(itemId);
+		button.setOnClickListener(v -> openTab(itemId));
+		sidebar.addView(button, sidebarItemParams(12));
+		navButtons.add(button);
+	}
+
+	private void addTab(LinearLayout tabs, int itemId, int titleRes) {
+		TextView tab = CottageTheme.text(this, getString(titleRes), 14, CottageTheme.INK, false);
+		tab.setId(itemId);
+		tab.setGravity(Gravity.CENTER);
+		tab.setSingleLine(true);
+		tab.setClickable(true);
+		tab.setFocusable(true);
+		tab.setOnClickListener(v -> openTab(itemId));
+		tabs.addView(tab, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+		navButtons.add(tab);
+	}
+
+	private void updateNavigationSelection() {
+		int selected = currentTabId;
+		for (View view : navButtons) {
+			boolean isSelected = view.getId() == selected;
+			if (view instanceof MaterialButton) {
+				CottageTheme.applyNavSelected((MaterialButton)view, isSelected);
+			} else if (view instanceof TextView) {
+				TextView tab = (TextView)view;
+				GradientDrawable background = new GradientDrawable();
+				background.setColor(isSelected ? CottageTheme.CAT : Color.TRANSPARENT);
+				background.setCornerRadius(ExtraSettingsUi.dp(this, 11));
+				tab.setBackground(background);
+				tab.setTextColor(isSelected ? CottageTheme.NAVY : CottageTheme.INK);
+				tab.setTypeface(android.graphics.Typeface.DEFAULT, isSelected ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
+				tab.setSelected(isSelected);
+			}
+		}
+	}
+
+	/** 主页插画只在横向且足够宽时显示（同 iPad：宽高比至少 1.25），否则主页显示游戏管理页。 */
+	private boolean showsHomeScene() {
+		android.content.res.Configuration configuration = getResources().getConfiguration();
+		return ExtraSettingsUi.isWideLayout(this) && configuration.screenHeightDp > 0 && configuration.screenWidthDp / (float)configuration.screenHeightDp >= 1.25f;
+	}
+
+	private void onHomeHotspot(int hotspot) {
+		if (hotspot == CottageHomeStage.HOTSPOT_START) {
+			launchGame();
+			return;
+		}
+		if (busy) {
+			return;
+		}
+		if (hotspot == CottageHomeStage.HOTSPOT_SAVES) {
+			openSaveSettingsTab();
+		} else if (hotspot == CottageHomeStage.HOTSPOT_MODS) {
+			openModsTab();
+		} else if (hotspot == CottageHomeStage.HOTSPOT_NETWORK) {
+			SettingsPage.selectSystemSegment();
+			openSettingsTab();
+		} else {
+			openSettingsTab();
+		}
+	}
+
+	private void updateHomeStatus() {
+		if (homeStage == null) {
+			return;
+		}
+		boolean ready;
+		try {
+			ready = payloadManager.getStatus().ready;
+		} catch (Exception exception) {
+			ready = false;
+		}
+		homeStage.setStatus(ready ? null : getString(R.string.cottage_status_missing_payload), !ready);
 	}
 
 	private void selectNavigationItem(int itemId) {
-		if (bottomNavigationView != null) {
-			bottomNavigationView.setSelectedItemId(itemId);
-		}
-		if (navigationRailView != null) {
-			navigationRailView.setSelectedItemId(itemId);
-		}
+		openTab(itemId);
 	}
 
 	private void maybeRunLaunchUpdateCheck() {
@@ -347,6 +462,18 @@ public class GameSettingsActivity extends AppCompatActivity implements ExtraSett
 		}
 		currentTabId = itemId;
 		ExtraSettingsPreferences.setLastSelectedMainTab(this, itemId);
+		updateNavigationSelection();
+		boolean scene = itemId == R.id.nav_game && showsHomeScene();
+		homeStage.setVisibility(scene ? View.VISIBLE : View.GONE);
+		shellLayout.setVisibility(scene ? View.GONE : View.VISIBLE);
+		for (View view : shellBackdrop) {
+			view.setVisibility(scene ? View.GONE : View.VISIBLE);
+		}
+		if (scene) {
+			updateHomeStatus();
+			contentFrame.removeAllViews();
+			return;
+		}
 		View page;
 		if (itemId == R.id.nav_mods) {
 			page = new ModsPage(this, repository, this).build();
@@ -361,6 +488,7 @@ public class GameSettingsActivity extends AppCompatActivity implements ExtraSett
 		}
 		contentFrame.removeAllViews();
 		contentFrame.addView(page, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+		androidx.core.view.ViewCompat.requestApplyInsets(contentFrame);
 	}
 
 	@Override
@@ -1409,7 +1537,7 @@ public class GameSettingsActivity extends AppCompatActivity implements ExtraSett
 		boolean offline = recommendation.kind == CompatRecommendationKind.OFFLINE;
 		int accent = offline ? ExtraSettingsUi.COLOR_WARNING : ExtraSettingsUi.COLOR_PRIMARY;
 		MaterialCardView card = ExtraSettingsUi.card(this);
-		card.setCardBackgroundColor(offline ? Color.rgb(54, 43, 31) : Color.rgb(30, 50, 39));
+		card.setCardBackgroundColor(offline ? Color.rgb(54, 43, 31) : CottageTheme.SELECTED_CARD);
 		card.setStrokeColor(accent);
 		card.setStrokeWidth(ExtraSettingsUi.dp(this, 1));
 		LinearLayout cardContent = ExtraSettingsUi.cardContent(this, card);

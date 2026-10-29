@@ -26,21 +26,25 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.shape.ShapeAppearanceModel;
 
 public final class ExtraSettingsUi {
-	public static final int COLOR_BACKGROUND = Color.rgb(15, 17, 23);
-	public static final int COLOR_SURFACE = Color.rgb(25, 29, 38);
-	public static final int COLOR_SURFACE_CONTAINER = Color.rgb(31, 35, 46);
-	public static final int COLOR_SURFACE_VARIANT = Color.rgb(42, 47, 61);
-	public static final int COLOR_OUTLINE = Color.rgb(102, 109, 125);
-	public static final int COLOR_ON_SURFACE = Color.rgb(241, 244, 250);
-	public static final int COLOR_ON_SURFACE_VARIANT = Color.rgb(194, 199, 211);
-	public static final int COLOR_MUTED = Color.rgb(143, 150, 165);
-	public static final int COLOR_PRIMARY = Color.rgb(166, 211, 183);
-	public static final int COLOR_ON_PRIMARY = Color.rgb(0, 56, 30);
-	public static final int COLOR_PRIMARY_CONTAINER = Color.rgb(31, 79, 49);
-	public static final int COLOR_ON_PRIMARY_CONTAINER = Color.rgb(201, 238, 211);
-	public static final int COLOR_SECONDARY_CONTAINER = Color.rgb(53, 58, 71);
+	// 主题：喵喵零和小鱼的小屋（夜间小屋配色，见 CottageTheme）。
+	public static final int COLOR_BACKGROUND = CottageTheme.BACKGROUND;
+	/** 启动器页面叠在模糊插画上，页面本身不铺底色。 */
+	public static final int COLOR_PAGE_BACKGROUND = Color.TRANSPARENT;
+	public static final int COLOR_SURFACE = CottageTheme.CARD_SOLID;
+	public static final int COLOR_SURFACE_CONTAINER = CottageTheme.CARD;
+	public static final int COLOR_SURFACE_VARIANT = CottageTheme.SECONDARY;
+	public static final int COLOR_OUTLINE = CottageTheme.OUTLINE;
+	public static final int COLOR_ON_SURFACE = CottageTheme.INK;
+	public static final int COLOR_ON_SURFACE_VARIANT = CottageTheme.INK_SOFT;
+	public static final int COLOR_MUTED = CottageTheme.MUTED;
+	public static final int COLOR_PRIMARY = CottageTheme.CAT;
+	public static final int COLOR_ON_PRIMARY = CottageTheme.NAVY;
+	public static final int COLOR_PRIMARY_CONTAINER = CottageTheme.SECONDARY;
+	public static final int COLOR_ON_PRIMARY_CONTAINER = CottageTheme.INK;
+	public static final int COLOR_SECONDARY_CONTAINER = CottageTheme.CARD_HIGH;
 	public static final int COLOR_WARNING = Color.rgb(255, 201, 111);
 	public static final int COLOR_ERROR = Color.rgb(255, 180, 171);
+	private static final int COLOR_RIPPLE = CottageTheme.RIPPLE;
 
 	private ExtraSettingsUi() {
 	}
@@ -244,8 +248,9 @@ public final class ExtraSettingsUi {
 		MaterialCardView card = new MaterialCardView(context);
 		card.setCardBackgroundColor(COLOR_SURFACE_CONTAINER);
 		card.setStrokeColor(COLOR_OUTLINE);
-		card.setStrokeWidth(dp(context, 1));
-		card.setRadius(dp(context, 24));
+		card.setStrokeWidth(dp(context, 1.5f));
+		card.setRadius(dp(context, 26));
+		card.setCardElevation(0);
 		card.setUseCompatPadding(false);
 		card.setClickable(false);
 		return card;
@@ -255,7 +260,7 @@ public final class ExtraSettingsUi {
 		MaterialCardView card = card(context);
 		card.setClickable(true);
 		card.setFocusable(true);
-		card.setRippleColor(ColorStateList.valueOf(Color.argb(72, 201, 238, 211)));
+		card.setRippleColor(ColorStateList.valueOf(COLOR_RIPPLE));
 		applyRipple(card);
 		return card;
 	}
@@ -288,7 +293,7 @@ public final class ExtraSettingsUi {
 
 	public static View divider(Context context) {
 		View divider = new View(context);
-		divider.setBackgroundColor(Color.rgb(55, 61, 76));
+		divider.setBackgroundColor(COLOR_OUTLINE);
 		divider.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(context, 1)));
 		return divider;
 	}
@@ -346,7 +351,7 @@ public final class ExtraSettingsUi {
 		button.setInsetTop(0);
 		button.setInsetBottom(0);
 		button.setBackgroundTintList(ColorStateList.valueOf(Color.TRANSPARENT));
-		button.setRippleColor(ColorStateList.valueOf(Color.argb(72, 201, 238, 211)));
+		button.setRippleColor(ColorStateList.valueOf(COLOR_RIPPLE));
 		button.setShapeAppearanceModel(ShapeAppearanceModel.builder().setAllCornerSizes(dp(context, 20)).build());
 		button.setPadding(dp(context, 10), dp(context, 10), dp(context, 10), dp(context, 10));
 		button.setLayoutParams(new LinearLayout.LayoutParams(dp(context, 44), dp(context, 44)));
@@ -359,9 +364,9 @@ public final class ExtraSettingsUi {
 		button.setTextColor(COLOR_ON_PRIMARY);
 		button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
 		button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-		button.setBackgroundTintList(ColorStateList.valueOf(COLOR_PRIMARY));
-		button.setRippleColor(ColorStateList.valueOf(Color.argb(96, 255, 255, 255)));
-		button.setShapeAppearanceModel(ShapeAppearanceModel.builder().setAllCornerSizes(dp(context, 18)).build());
+		button.setBackgroundTintList(ColorStateList.valueOf(CottageTheme.CREAM));
+		button.setRippleColor(ColorStateList.valueOf(Color.argb(64, 27, 37, 64)));
+		button.setShapeAppearanceModel(ShapeAppearanceModel.builder().setAllCornerSizes(dp(context, 24)).build());
 		button.setPadding(dp(context, 16), dp(context, 10), dp(context, 16), dp(context, 10));
 		if (iconRes != 0) {
 			MaterialSymbols.applyButtonIcon(button, iconRes, ColorStateList.valueOf(COLOR_ON_PRIMARY), 24);
@@ -386,8 +391,8 @@ public final class ExtraSettingsUi {
 		button.setStrokeColor(ColorStateList.valueOf(COLOR_PRIMARY));
 		button.setStrokeWidth(dp(context, 1));
 		button.setBackgroundTintList(ColorStateList.valueOf(Color.TRANSPARENT));
-		button.setRippleColor(ColorStateList.valueOf(Color.argb(72, 201, 238, 211)));
-		button.setShapeAppearanceModel(ShapeAppearanceModel.builder().setAllCornerSizes(dp(context, 18)).build());
+		button.setRippleColor(ColorStateList.valueOf(COLOR_RIPPLE));
+		button.setShapeAppearanceModel(ShapeAppearanceModel.builder().setAllCornerSizes(dp(context, 24)).build());
 		if (iconRes != 0) {
 			MaterialSymbols.applyButtonIcon(button, iconRes, ColorStateList.valueOf(COLOR_PRIMARY), 24);
 		}
@@ -406,7 +411,7 @@ public final class ExtraSettingsUi {
 		button.setInsetTop(0);
 		button.setInsetBottom(0);
 		button.setBackgroundTintList(ColorStateList.valueOf(Color.TRANSPARENT));
-		button.setRippleColor(ColorStateList.valueOf(Color.argb(72, 201, 238, 211)));
+		button.setRippleColor(ColorStateList.valueOf(COLOR_RIPPLE));
 		button.setShapeAppearanceModel(ShapeAppearanceModel.builder().setAllCornerSizes(dp(context, 16)).build());
 		button.setPadding(dp(context, 8), dp(context, 6), dp(context, 8), dp(context, 6));
 		if (iconRes != 0) {
@@ -443,7 +448,7 @@ public final class ExtraSettingsUi {
 		card.setChecked(selected);
 		card.setStrokeWidth(dp(card.getContext(), selected ? 2 : 1));
 		card.setStrokeColor(selected ? COLOR_PRIMARY : COLOR_OUTLINE);
-		card.setCardBackgroundColor(selected ? Color.rgb(30, 50, 39) : COLOR_SURFACE_CONTAINER);
+		card.setCardBackgroundColor(selected ? CottageTheme.SELECTED_CARD : COLOR_SURFACE_CONTAINER);
 	}
 
 	public static void addWeightedCardsRow(Context context, LinearLayout parent, MaterialCardView... cards) {
