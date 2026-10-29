@@ -200,6 +200,13 @@
             android:foregroundServiceType="dataSync"
             android:stopWithTask="false" />
 
+        <!-- 联机小屋在线房间：游戏运行期间保住进程内的 frpc 映射与房间卡片（同 iPad STS2RoomService）。 -->
+        <service
+            android:name=".online.OnlineRoomService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
+
         <receiver
             android:name=".DebugAutomationReceiver"
             android:exported="true">

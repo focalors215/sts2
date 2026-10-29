@@ -101,6 +101,12 @@ dependencies {
     }
 }
 
+// 在线房间默认 frp 服务器（同 iPad 的 STS2FrpDefaults.h），来自 .env 或 -P 参数，个人服务器信息不入库。
+def onlineRoomDefault = { String name, String fallback ->
+    def value = project.findProperty(name.toLowerCase()) ?: System.getenv(name) ?: fallback
+    return value.toString().replace('\\', '\\\\').replace('"', '\\"')
+}
+
 android {
     compileSdkVersion versions.compileSdk
     buildToolsVersion versions.buildTools
@@ -140,6 +146,10 @@ android {
         targetSdkVersion getExportTargetSdkVersion()
 
         missingDimensionStrategy 'products', 'template'
+
+        buildConfigField "String", "STS2_FRP_DEFAULT_SERVER", "\"${onlineRoomDefault('STS2_FRP_DEFAULT_SERVER', '')}\""
+        buildConfigField "int", "STS2_FRP_DEFAULT_SERVER_PORT", "${onlineRoomDefault('STS2_FRP_DEFAULT_SERVER_PORT', '7000').isInteger() ? onlineRoomDefault('STS2_FRP_DEFAULT_SERVER_PORT', '7000') : '7000'}"
+        buildConfigField "String", "STS2_FRP_DEFAULT_TOKEN", "\"${onlineRoomDefault('STS2_FRP_DEFAULT_TOKEN', '')}\""
 
         externalNativeBuild {
             cmake {

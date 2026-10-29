@@ -185,4 +185,7 @@ patch_fmod_aar "$ANDROID_DST/libs/debug/fmod-release.aar"
 patch_fmod_aar "$ANDROID_DST/libs/release/fmod-release.aar"
 printf 'Staged FMOD 2.03.06 Android runtime from %s\n' "$FMOD_ANDROID_LIBS_DIR"
 
+# rsync --delete above clears libs/; restage the online-room frp client afterwards.
+"$ROOT/tools/android/stage-frpc.sh"
+
 printf 'Synced runtime artifacts from %s to %s\n' "$ANDROID_SRC" "$ANDROID_DST"

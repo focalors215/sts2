@@ -2,4 +2,6 @@
 <resources>
     <!-- Wide-layout sidebar entry for the game dashboard (the home tab shows the illustrated cottage). -->
     <item name="nav_dashboard" type="id" />
+    <!-- 联机小屋：在线房间与局域网直连（与 iPad 启动器 PageNetwork 对应）。 -->
+    <item name="nav_network" type="id" />
 </resources>

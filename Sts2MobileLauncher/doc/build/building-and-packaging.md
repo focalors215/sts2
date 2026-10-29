@@ -104,6 +104,8 @@ tools/android/sync-runtime-from-references.sh
 
 这些产物位于 `android/assets/dotnet_bcl/`、`android/libs/` 等 gitignored 路径，不手工维护。长期源码化状态和剩余阻塞见 [`source-dependencies.md`](source-dependencies.md)。
 
+同步脚本最后会调用 `tools/android/stage-frpc.sh`：下载官方 frp v0.71.1 `android_arm64` 发行包并校验固定 SHA-256，把 `frpc` 放成 `android/libs/{debug,dev,release}/arm64-v8a/libfrpc.so`，供「联机小屋」在线房间开房使用（缓存在 `.agent/cache/frp/`，可用 `STS2_FRPC_BINARY` 指向本地文件）。默认 frp 服务器可通过 `.env` 的 `STS2_FRP_DEFAULT_SERVER` / `STS2_FRP_DEFAULT_SERVER_PORT` / `STS2_FRP_DEFAULT_TOKEN` 写进 `BuildConfig`。详见 [`runtime/online-rooms.md`](../runtime/online-rooms.md)。
+
 ### 4.1 实验性 Mono 内存总量修复（默认关闭）
 
 部分 MOD（例如 Combat Solver）使用 `GC.GetGCMemoryInfo()` 计算内存条。当前 Ekyso 定制 Mono 9.0.7.0 的 `mono_determine_physical_ram_size()` 最终以空闲页计算总量，可能把启动时空闲内存误报为 GC 可用总量。匹配该定制运行库的完整源码/构建配置尚未获得，因此这里不是源码重建，而是经明确授权的最小二进制实验修复。
