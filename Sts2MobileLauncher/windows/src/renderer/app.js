@@ -314,7 +314,7 @@ function homeStatus() {
 	if (!profile) {
 		return { text: t('status_missing'), action: () => openTab('versions') };
 	}
-	if (!profile.info.ready && !profile.launchViaSteam) {
+	if (!profile.info.ready) {
 		return { text: t('status_broken'), action: () => openTab('versions') };
 	}
 	return null;
@@ -409,7 +409,7 @@ function buildDashboard(inner, wide) {
 		profile ? t('profile_chip', { name: profile.name || profile.gameDir }) : t('profile_chip_none')));
 	inner.append(header);
 
-	const ready = !!profile && (profile.info.ready || profile.launchViaSteam);
+	const ready = !!profile && profile.info.ready;
 	const hero = h('div', { class: 'card hero' }, artCard('postcard', t('postcard')));
 	const names = h('div', { class: 'grow' }, h('div', { class: 'hero-name' }, t('theme_name')), h('div', { class: 'hero-sub' }, t('hero_subtitle')));
 	hero.append(h('div', { class: 'row' }, names, window.mascot.mascotRow(44)));

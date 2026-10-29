@@ -33,9 +33,10 @@ class LauncherConfig {
 			raw = {};
 		}
 		const profiles = Array.isArray(raw.profiles) ? raw.profiles.filter(p => p && typeof p.gameDir === 'string') : [];
+		const legacyProfiles = raw.version === undefined || raw.version === 1;
 		return {
-			version: 1,
-			profiles: profiles.map(normalizeProfile),
+			version: 2,
+			profiles: profiles.map(p => normalizeProfile(legacyProfiles && p.source === 'steam' ? { ...p, launchViaSteam: false } : p)),
 			selectedProfileId: typeof raw.selectedProfileId === 'string' ? raw.selectedProfileId : '',
 			lastTab: typeof raw.lastTab === 'string' ? raw.lastTab : 'home',
 			settings: normalizeSettings(raw.settings),
@@ -126,7 +127,7 @@ function normalizeProfile(raw) {
 		gameDir: path.resolve(String(raw.gameDir)),
 		source: raw.source === 'steam' ? 'steam' : 'manual',
 		steamBranch: typeof raw.steamBranch === 'string' ? raw.steamBranch : '',
-		launchViaSteam: raw.launchViaSteam === undefined ? raw.source === 'steam' : raw.launchViaSteam === true,
+		launchViaSteam: raw.launchViaSteam === true,
 		extraArgs: typeof raw.extraArgs === 'string' ? raw.extraArgs : '',
 	};
 }
