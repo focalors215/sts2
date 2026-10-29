@@ -1,0 +1,18 @@
+# .NET / build output
+**/bin/
+**/obj/
+**/.godot/
+dist/
+out/
+*.zip
+*.nupkg
+
+# Optional local compile-gate reference DLLs/symlinks. Configure paths via
+# parent .env / local.properties instead of committing workspace symlinks.
+refs/**/*.dll
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,1005 @@
+using System;
+using System.Buffers.Binary;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using System.Reflection;
+using System.Text;
+using System.Text.Json;
+using System.Threading.Tasks;
+using Godot;
+using HarmonyLib;
+using MegaCrit.Sts2.addons.mega_text;
+using MegaCrit.Sts2.Core.Debug;
+using MegaCrit.Sts2.Core.Entities.Multiplayer;
+using MegaCrit.Sts2.Core.Helpers;
+using MegaCrit.Sts2.Core.Modding;
+using MegaCrit.Sts2.Core.Multiplayer;
+using MegaCrit.Sts2.Core.Multiplayer.Connection;
+using MegaCrit.Sts2.Core.Multiplayer.Game;
+using MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby;
+using MegaCrit.Sts2.Core.Nodes;
+using MegaCrit.Sts2.Core.Nodes.CommonUi;
+using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
+using MegaCrit.Sts2.Core.Platform;
+using MegaCrit.Sts2.Core.Platform.Null;
+using MegaCrit.Sts2.Core.Platform.Steam;
+using MegaCrit.Sts2.Core.Runs;
+using MegaCrit.Sts2.Core.Saves;
+using STS2Mobile.Android;
+
+namespace STS2Mobile.Patches;
+
+/// <summary>
+/// Adapts the original LAN host/join flow for Android without owning the game
+/// wire protocol. Message IDs and packet serialization must remain entirely
+/// under the original <c>MessageTypes</c>/<c>NetMessageBus</c> implementation so
+/// Android stays compatible with an unmodified PC peer and with the original
+/// per-version and MOD-aware type ordering.
+/// </summary>
+public static class LanMultiplayerPatches
+{
+    public const ushort DefaultPort = 33771;
+    private const int DefaultMaxPlayers = 4;
+    private const int SteamMaxPlayers = 250;
+    private const string LanPlayerIdSettingKey = "lan_player_id";
+    private const string LanMultiplayerSavePlayerIdSettingKey = "lan_multiplayer_save_player_id";
+
+    private static readonly Dictionary<PlatformType, Dictionary<ulong, string>> PlayerNameOverrides = new();
+
+    /// <summary>True once the LAN patches are active (not disabled or replaced by a lobby MOD).</summary>
+    public static bool Applied { get; private set; }
+
+    public static void Apply(Harmony harmony)
+    {
+        if (!ShouldApplyLocalLanPatches())
+            return;
+
+#if !STS2_TARGET_1100 && !STS2_TARGET_1110
+        PatchHelper.Patch(harmony, typeof(InitialGameInfoMessage), "Basic", postfix: PatchHelper.Method(typeof(LanMultiplayerPatches), nameof(InitialGameInfoBasicPostfix)));
+#endif
+        PatchHelper.Patch(harmony, typeof(ModManager), "GetGameplayRelevantModNameList", postfix: PatchHelper.Method(typeof(LanMultiplayerPatches), nameof(ModNameListPostfix)));
+        PatchHelper.Patch(harmony, typeof(ModManager), "GetModNameList", postfix: PatchHelper.Method(typeof(LanMultiplayerPatches), nameof(ModNameListPostfix)));
+        PatchHelper.Patch(harmony, typeof(JoinFlow), "Begin", prefix: PatchHelper.Method(typeof(LanMultiplayerPatches), nameof(JoinFlowBeginPrefix)));
+        PatchHelper.Patch(harmony, typeof(NullPlatformUtilStrategy), "GetPlayerName", prefix: PatchHelper.Method(typeof(LanMultiplayerPatches), nameof(NullGetPlayerNamePrefix)));
+        PatchHelper.Patch(harmony, typeof(NullPlatformUtilStrategy), "GetLocalPlayerId", prefix: PatchHelper.Method(typeof(LanMultiplayerPatches), nameof(NullGetLocalPlayerIdPrefix)));
+        PatchMultiplayerSaveCanonicalization(harmony);
+        var settingsScreenType = typeof(NJoinFriendScreen).Assembly.GetType("MegaCrit.Sts2.Core.Nodes.Screens.Settings.NSettingsScreen");
+        if (settingsScreenType != null)
+            PatchHelper.Patch(harmony, settingsScreenType, "_Ready", postfix: PatchHelper.Method(typeof(LanMultiplayerPatches), nameof(SettingsScreenReadyPostfix)));
+        PatchHelper.Patch(harmony, typeof(NJoinFriendScreen), "OnSubmenuOpened", prefix: PatchHelper.Method(typeof(LanMultiplayerPatches), nameof(JoinFriendOpenedPrefix)));
+        PatchHelper.Patch(harmony, typeof(NJoinFriendScreen), "RefreshButtonClicked", prefix: PatchHelper.Method(typeof(LanMultiplayerPatches), nameof(JoinFriendRefreshButtonPrefix)));
+        PatchHelper.Patch(harmony, typeof(NJoinFriendScreen), "OnSubmenuClosed", postfix: PatchHelper.Method(typeof(LanMultiplayerPatches), nameof(JoinFriendClosedPostfix)));
+        PatchHelper.Patch(harmony, typeof(NMultiplayerHostSubmenu), "StartHostAsync", prefix: PatchHelper.Method(typeof(LanMultiplayerPatches), nameof(HostSubmenuStartHostAsyncPrefix)));
+        PatchHelper.Patch(harmony, typeof(NMultiplayerSubmenu), "StartHostAsync", prefix: PatchHelper.Method(typeof(LanMultiplayerPatches), nameof(MultiplayerSubmenuStartHostAsyncPrefix)));
+
+        Applied = true;
+        PatchHelper.Log("LAN multiplayer compatibility patches applied; using the game-native message protocol.");
+    }
+
+    public static void InitialGameInfoBasicPostfix(ref InitialGameInfoMessage __result)
+    {
+        var boxedResult = (object)__result;
+        if (SetInitialGameInfoModField(boxedResult, "mods"))
+        {
+            __result = (InitialGameInfoMessage)boxedResult;
+            return;
+        }
+
+        SetInitialGameInfoModField(boxedResult, "gameplayAffectingMods");
+        __result = (InitialGameInfoMessage)boxedResult;
+    }
+
+    private static bool SetInitialGameInfoModField(object message, string fieldName)
+    {
+        var field = AccessTools.Field(typeof(InitialGameInfoMessage), fieldName);
+        if (field == null)
+            return false;
+
+        var mods = field.GetValue(message) as List<string>;
+        field.SetValue(message, GetMultiplayerCompatibilityModNameList(mods));
+        return true;
+    }
+
+    public static void ModNameListPostfix(ref List<string> __result)
+    {
+        __result = GetMultiplayerCompatibilityModNameList(__result);
+    }
+
+    public static void JoinFlowBeginPrefix()
+    {
+        ClearPlayerNameOverrides(PlatformType.None);
+    }
+
+    public static bool NullGetPlayerNamePrefix(ulong playerId, ref string __result)
+    {
+        if (TryGetPlayerNameOverride(PlatformType.None, playerId, out var playerName))
+        {
+            __result = playerName;
+            return false;
+        }
+        __result = playerId switch
+        {
+            1UL => "Host",
+            1000UL => "Client 1",
+            2000UL => "Client 2",
+            3000UL => "Client 3",
+            _ => $"Player {playerId % 10000UL:0000}",
+        };
+        return false;
+    }
+
+    public static bool NullGetLocalPlayerIdPrefix(ref ulong __result)
+    {
+        if (AndroidSettingsBridge.GetBool("lan_use_custom_platform_player_id", false) && TryGetConfiguredCustomPeerId(out var playerId))
+        {
+            __result = playerId;
+            return false;
+        }
+        return true;
+    }
+
+    public static void LoadAndCanonicalizeMultiplayerRunSavePrefix(object __instance, ref ulong __0)
+    {
+        try
+        {
+            var localPlayerId = __0;
+            var saveData = TryLoadRawMultiplayerSave(__instance);
+            var savePlayerIds = GetSavePlayerIds(saveData).Distinct().ToList();
+            if (savePlayerIds.Count == 0)
+                return;
+            if (savePlayerIds.Contains(localPlayerId))
+            {
+                RememberMultiplayerSavePlayerId(localPlayerId);
+                return;
+            }
+
+            if (TryResolveMultiplayerSavePlayerId(savePlayerIds, out var savePlayerId))
+            {
+                PatchHelper.Log($"LAN multiplayer save canonicalization uses saved player ID {savePlayerId} instead of current platform ID {localPlayerId}.");
+                __0 = savePlayerId;
+                RememberMultiplayerSavePlayerId(savePlayerId);
+            }
+            else
+            {
+                PatchHelper.Log($"LAN multiplayer save canonicalization kept current platform ID {localPlayerId}; save has multiple unmatched player IDs: {string.Join(",", savePlayerIds)}");
+            }
+        }
+        catch (Exception exception)
+        {
+            PatchHelper.Log($"LAN multiplayer save ID compatibility patch failed: {exception}");
+        }
+    }
+
+    public static void SettingsScreenReadyPostfix(Node __instance)
+    {
+        try
+        {
+            var enabled = AndroidSettingsBridge.GetBool("max_multiplayer_enabled", true);
+            var generalSettings = __instance.GetNodeOrNull<Node>("%GeneralSettings");
+            var content = generalSettings?.GetType().GetProperty("Content", BindingFlags.Public | BindingFlags.Instance)?.GetValue(generalSettings) as Node
+                ?? generalSettings?.GetNodeOrNull<Node>("Content");
+            var maxPlayersNode = content?.GetNodeOrNull<Control>("MaxMultiplayerPlayers");
+            var maxPlayersDivider = content?.GetNodeOrNull<Control>("MaxMultiplayerPlayersDivider");
+            if (maxPlayersNode != null)
+                maxPlayersNode.Visible = enabled;
+            if (maxPlayersDivider != null)
+                maxPlayersDivider.Visible = enabled;
+        }
+        catch (Exception exception)
+        {
+            PatchHelper.Log($"LAN max-player settings visibility patch failed: {exception.Message}");
+        }
+    }
+
+    public static bool JoinFriendOpenedPrefix(NJoinFriendScreen __instance)
+    {
+        if (SteamInitializer.Initialized || CommandLineHelper.HasArg("fastmp"))
+            return true;
+
+        try
+        {
+            var loadingOverlay = __instance.GetNodeOrNull<Control>("%LoadingOverlay");
+            if (loadingOverlay != null)
+                loadingOverlay.Visible = false;
+            ConfigureLanJoinScreen(__instance);
+        }
+        catch (Exception exception)
+        {
+            PatchHelper.Log($"LAN join screen patch failed, falling back to original: {exception}");
+            return true;
+        }
+        return false;
+    }
+
+    public static bool JoinFriendRefreshButtonPrefix(NJoinFriendScreen __instance)
+    {
+        if (SteamInitializer.Initialized || CommandLineHelper.HasArg("fastmp") || !TryGetLanInputs(__instance, out var hostInput, out var portInput))
+            return true;
+        TaskHelper.RunSafely(JoinLanGameAsync(__instance, hostInput, portInput));
+        return false;
+    }
+
+    public static void JoinFriendClosedPostfix(object __instance)
+    {
+        try
+        {
+            var currentJoinFlow = AccessTools.Field(__instance.GetType(), "_currentJoinFlow")?.GetValue(__instance);
+            var cancelToken = currentJoinFlow?.GetType().GetProperty("CancelToken")?.GetValue(currentJoinFlow);
+            cancelToken?.GetType().GetMethod("Cancel", Type.EmptyTypes)?.Invoke(cancelToken, null);
+        }
+        catch
+        {
+        }
+    }
+
+    public static bool HostSubmenuStartHostAsyncPrefix(GameMode gameMode, Control loadingOverlay, NSubmenuStack stack, ref Task __result)
+    {
+        if (SteamInitializer.Initialized && !CommandLineHelper.HasArg("fastmp"))
+            return true;
+        __result = StartHostFromSubmenuAsync(gameMode, loadingOverlay, stack);
+        return false;
+    }
+
+    public static bool MultiplayerSubmenuStartHostAsyncPrefix(object __instance, SerializableRun run, ref Task __result)
+    {
+        if (SteamInitializer.Initialized && !CommandLineHelper.HasArg("fastmp"))
+            return true;
+        __result = StartLoadedHostAsync(__instance, run);
+        return false;
+    }
+
+    private static bool ShouldApplyLocalLanPatches()
+    {
+        if (!AndroidSettingsBridge.GetBool("lan_multiplayer_enabled", true))
+        {
+            PatchHelper.Log("Local LAN multiplayer patches are disabled by Android companion settings.");
+            return false;
+        }
+
+        if (IsSts2GameLobbyModLoaded())
+        {
+            PatchHelper.Log("Detected STS2 Game Lobby / sts2_lan_connect mod; skipping local LAN multiplayer patches to avoid protocol conflicts.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static void PatchMultiplayerSaveCanonicalization(Harmony harmony)
+    {
+        try
+        {
+            var runSaveManagerType = typeof(SaveManager).Assembly.GetType("MegaCrit.Sts2.Core.Saves.Managers.RunSaveManager", throwOnError: false);
+            if (runSaveManagerType == null)
+            {
+                PatchHelper.Log("SKIPPED RunSaveManager.LoadAndCanonicalizeMultiplayerRunSave: type not found");
+                return;
+            }
+            PatchHelper.Patch(harmony, runSaveManagerType, "LoadAndCanonicalizeMultiplayerRunSave", prefix: PatchHelper.Method(typeof(LanMultiplayerPatches), nameof(LoadAndCanonicalizeMultiplayerRunSavePrefix)));
+        }
+        catch (Exception exception)
+        {
+            PatchHelper.Log($"FAILED RunSaveManager.LoadAndCanonicalizeMultiplayerRunSave compatibility patch setup: {exception}");
+        }
+    }
+
+    private static object TryLoadRawMultiplayerSave(object runSaveManager)
+    {
+        var method = runSaveManager?.GetType().GetMethod("LoadMultiplayerRunSave", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        var result = method?.Invoke(runSaveManager, null);
+        if (result == null)
+            return null;
+        var success = result.GetType().GetProperty("Success", BindingFlags.Public | BindingFlags.Instance)?.GetValue(result);
+        if (success is bool ok && !ok)
+            return null;
+        return result.GetType().GetProperty("SaveData", BindingFlags.Public | BindingFlags.Instance)?.GetValue(result);
+    }
+
+    private static IEnumerable<ulong> GetSavePlayerIds(object saveData)
+    {
+        var players = saveData?.GetType().GetProperty("Players", BindingFlags.Public | BindingFlags.Instance)?.GetValue(saveData) as System.Collections.IEnumerable;
+        if (players == null)
+            yield break;
+        foreach (var player in players)
+        {
+            if (player == null)
+                continue;
+            var value = player.GetType().GetProperty("NetId", BindingFlags.Public | BindingFlags.Instance)?.GetValue(player);
+            if (value is ulong playerId && playerId > 0)
+                yield return playerId;
+        }
+    }
+
+    private static bool TryResolveMultiplayerSavePlayerId(IReadOnlyCollection<ulong> savePlayerIds, out ulong playerId)
+    {
+        playerId = 0;
+        if (savePlayerIds == null || savePlayerIds.Count == 0)
+            return false;
+
+        foreach (var candidate in GetStableMultiplayerSavePlayerIdCandidates())
+        {
+            if (candidate > 0 && savePlayerIds.Contains(candidate))
+            {
+                playerId = candidate;
+                return true;
+            }
+        }
+
+        if (savePlayerIds.Count == 1)
+        {
+            playerId = savePlayerIds.First();
+            return true;
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<ulong> GetStableMultiplayerSavePlayerIdCandidates()
+    {
+        if (TryGetStoredLanId(LanMultiplayerSavePlayerIdSettingKey, out var savedMultiplayerId))
+            yield return savedMultiplayerId;
+        if (TryGetStoredLanId(LanPlayerIdSettingKey, out var generatedLanId))
+            yield return generatedLanId;
+        yield return 1UL;
+    }
+
+    private static bool TryGetStoredLanId(string key, out ulong value)
+    {
+        value = 0;
+        var raw = AndroidSettingsBridge.GetString(key, string.Empty);
+        return ulong.TryParse(raw, out value) && value > 0;
+    }
+
+    private static void RememberMultiplayerSavePlayerId(ulong playerId)
+    {
+        if (playerId > 0)
+            SaveLanSetting(LanMultiplayerSavePlayerIdSettingKey, playerId);
+    }
+
+    private static bool IsSts2GameLobbyModLoaded()
+    {
+        try
+        {
+            var getLoadedMods = typeof(ModManager).GetMethod("GetLoadedMods", BindingFlags.Public | BindingFlags.Static);
+            if (getLoadedMods?.Invoke(null, null) is System.Collections.IEnumerable loadedMods)
+            {
+                foreach (var mod in loadedMods)
+                {
+                    if (IsSts2GameLobbyMod(mod))
+                        return true;
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            PatchHelper.Log($"Failed to inspect loaded mods for STS2 Game Lobby: {exception.Message}");
+        }
+
+        try
+        {
+            return AppDomain.CurrentDomain.GetAssemblies().Any(IsSts2GameLobbyAssembly);
+        }
+        catch (Exception exception)
+        {
+            PatchHelper.Log($"Failed to inspect loaded assemblies for STS2 Game Lobby: {exception.Message}");
+            return false;
+        }
+    }
+
+    private static bool IsSts2GameLobbyMod(object mod)
+    {
+        if (mod == null)
+            return false;
+        var type = mod.GetType();
+        var manifest = type.GetField("manifest", BindingFlags.Public | BindingFlags.Instance)?.GetValue(mod)
+            ?? type.GetProperty("manifest", BindingFlags.Public | BindingFlags.Instance)?.GetValue(mod);
+        if (manifest != null)
+        {
+            var manifestType = manifest.GetType();
+            if (IsSts2GameLobbyIdentifier(manifestType.GetField("id", BindingFlags.Public | BindingFlags.Instance)?.GetValue(manifest) as string)
+                || IsSts2GameLobbyIdentifier(manifestType.GetProperty("id", BindingFlags.Public | BindingFlags.Instance)?.GetValue(manifest) as string)
+                || IsSts2GameLobbyIdentifier(manifestType.GetField("name", BindingFlags.Public | BindingFlags.Instance)?.GetValue(manifest) as string)
+                || IsSts2GameLobbyIdentifier(manifestType.GetProperty("name", BindingFlags.Public | BindingFlags.Instance)?.GetValue(manifest) as string))
+            {
+                return true;
+            }
+        }
+
+        var assembly = type.GetField("assembly", BindingFlags.Public | BindingFlags.Instance)?.GetValue(mod) as Assembly
+            ?? type.GetProperty("assembly", BindingFlags.Public | BindingFlags.Instance)?.GetValue(mod) as Assembly;
+        return assembly != null && IsSts2GameLobbyAssembly(assembly);
+    }
+
+    private static bool IsSts2GameLobbyAssembly(Assembly assembly)
+    {
+        if (assembly == null || assembly == typeof(LanMultiplayerPatches).Assembly)
+            return false;
+        var assemblyName = assembly.GetName().Name;
+        if (IsSts2GameLobbyIdentifier(assemblyName))
+            return true;
+        try
+        {
+            return assembly.GetTypes().Any(type => type.FullName != null && type.FullName.StartsWith("Sts2LanConnect.", StringComparison.Ordinal));
+        }
+        catch (ReflectionTypeLoadException exception)
+        {
+            return exception.Types.Any(type => type?.FullName != null && type.FullName.StartsWith("Sts2LanConnect.", StringComparison.Ordinal));
+        }
+    }
+
+    private static bool IsSts2GameLobbyIdentifier(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        var normalized = value.Trim().Replace('-', '_').Replace(' ', '_');
+        return normalized.Equals("sts2_lan_connect", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("sts2_game_lobby", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("sts2_lobby_connect", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("sts2_lan_connect", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("sts2_game_lobby", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static List<string> GetMultiplayerCompatibilityModNameList(List<string> baseModNames)
+    {
+        var result = baseModNames ?? new List<string>();
+        foreach (var configured in GetConfiguredCompatibilityModNames())
+        {
+            if (!result.Contains(configured, StringComparer.Ordinal))
+                result.Add(configured);
+        }
+        return result.Count == 0 ? null : result;
+    }
+
+    private static IEnumerable<string> GetConfiguredCompatibilityModNames()
+    {
+        if (!AndroidSettingsBridge.TryGet("lan_compatibility_mod_names", out var element) || element.ValueKind != System.Text.Json.JsonValueKind.Array)
+            yield break;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in element.EnumerateArray())
+        {
+            var value = NormalizeText(item.ValueKind == System.Text.Json.JsonValueKind.String ? item.GetString() : item.ToString());
+            if (!string.IsNullOrWhiteSpace(value) && seen.Add(value))
+                yield return value;
+        }
+    }
+
+    private static int GetConfiguredHostMaxPlayers()
+    {
+        if (!AndroidSettingsBridge.GetBool("max_multiplayer_enabled", true))
+            return DefaultMaxPlayers;
+        var configured = AndroidSettingsBridge.GetInt("max_multiplayer_players", DefaultMaxPlayers);
+        return configured <= 0 ? DefaultMaxPlayers : configured;
+    }
+
+    private static int GetHostCapacityForPlatform(PlatformType platformType, int requestedMaxPlayers)
+    {
+        requestedMaxPlayers = requestedMaxPlayers <= 0 ? DefaultMaxPlayers : requestedMaxPlayers;
+        return platformType == PlatformType.Steam ? Math.Min(requestedMaxPlayers, SteamMaxPlayers) : requestedMaxPlayers;
+    }
+
+    internal static ulong GetOrCreateLocalPeerId()
+    {
+        if (TryGetConfiguredCustomPeerId(out var customPeerId))
+            return customPeerId;
+
+        var current = AndroidSettingsBridge.GetString(LanPlayerIdSettingKey, string.Empty);
+        if (ulong.TryParse(current, out var saved) && saved > 1)
+            return saved;
+
+        var generated = 0UL;
+        while (generated <= 1)
+        {
+            generated = BitConverter.ToUInt64(System.Security.Cryptography.RandomNumberGenerator.GetBytes(sizeof(ulong))) & 0x7FFFFFFFFFFFFFFFUL;
+        }
+        SaveLanSetting(LanPlayerIdSettingKey, generated);
+        PatchHelper.Log($"Generated persistent LAN peer ID {generated}");
+        return generated;
+    }
+
+    private static bool TryGetConfiguredCustomPeerId(out ulong peerId)
+    {
+        peerId = 0;
+        if (!AndroidSettingsBridge.GetBool("lan_use_custom_player_id", false))
+            return false;
+        var normalized = NormalizeText(AndroidSettingsBridge.GetString("lan_custom_player_id", string.Empty));
+        if (string.IsNullOrWhiteSpace(normalized))
+            return false;
+        if (ulong.TryParse(normalized, out peerId) && peerId > 1)
+            return true;
+        peerId = MapCustomPeerId(normalized);
+        return true;
+    }
+
+    private static string GetConfiguredPlayerDisplayName()
+    {
+        return AndroidSettingsBridge.GetBool("lan_use_custom_player_id", false)
+            ? NormalizeText(AndroidSettingsBridge.GetString("lan_custom_player_id", string.Empty))
+            : string.Empty;
+    }
+
+    private static ulong MapCustomPeerId(string normalizedPeerId)
+    {
+        var bytes = Encoding.UTF8.GetBytes(normalizedPeerId);
+        using var sha256 = System.Security.Cryptography.SHA256.Create();
+        var hash = sha256.ComputeHash(bytes);
+        var value = BinaryPrimitives.ReadUInt64BigEndian(hash.AsSpan(0, 8)) & 0x7FFFFFFFFFFFFFFFUL;
+        return value <= 1 ? value + 2 : value;
+    }
+
+    private static string NormalizeText(string raw) => (raw ?? string.Empty).Trim().Normalize(NormalizationForm.FormKC);
+
+    private static string T(string zh, string en) => IsZh() ? zh : en;
+
+    private static bool IsZh()
+    {
+        try
+        {
+            var locManagerType = typeof(NGame).Assembly.GetType("MegaCrit.Sts2.Core.Localization.LocManager");
+            var instance = locManagerType?.GetProperty("Instance", BindingFlags.Public | BindingFlags.Static)?.GetValue(null);
+            var language = locManagerType?.GetProperty("Language", BindingFlags.Public | BindingFlags.Instance)?.GetValue(instance) as string ?? string.Empty;
+            return language.StartsWith("zh", StringComparison.OrdinalIgnoreCase) || language.StartsWith("zhs", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryParseEndpoint(string hostInput, string portInput, out string host, out ushort port, out string error)
+    {
+        host = (hostInput ?? string.Empty).Trim();
+        var portText = (portInput ?? string.Empty).Trim();
+        if (TryExtractInlinePort(ref host, out var inlinePort))
+            portText = inlinePort.ToString();
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            port = 0;
+            error = T("请输入房主 IP 地址。", "Enter the host IP address.");
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(portText))
+        {
+            port = DefaultPort;
+            error = string.Empty;
+            return true;
+        }
+        if (!ushort.TryParse(portText, out port) || port == 0)
+        {
+            error = T("端口必须是 1 到 65535 之间的数字。", "Port must be a number from 1 to 65535.");
+            return false;
+        }
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryExtractInlinePort(ref string host, out ushort port)
+    {
+        port = 0;
+        if (string.IsNullOrWhiteSpace(host))
+            return false;
+        var colon = Math.Max(host.LastIndexOf(':'), host.LastIndexOf('：'));
+        if (colon <= 0)
+            return false;
+        var hostPart = host[..colon].Trim();
+        var portPart = host[(colon + 1)..].Trim();
+        if (string.IsNullOrWhiteSpace(hostPart) || string.IsNullOrWhiteSpace(portPart) || hostPart.Contains(':') || hostPart.Contains('：'))
+            return false;
+        if (!ushort.TryParse(portPart, out port) || port == 0)
+            return false;
+        host = hostPart;
+        return true;
+    }
+
+    private static void SaveJoinEndpoint(string host, ushort port)
+    {
+        SaveLanSetting("lan_join_host", host.Trim());
+        SaveLanSetting("lan_join_port", port);
+    }
+
+    private static string GetSavedJoinHost() => AndroidSettingsBridge.GetString("lan_join_host", string.Empty);
+
+    private static ushort GetSavedJoinPort()
+    {
+        var port = AndroidSettingsBridge.GetInt("lan_join_port", DefaultPort);
+        return port is > 0 and <= 65535 ? (ushort)port : DefaultPort;
+    }
+
+    private static void SaveLanSetting(string key, object value)
+    {
+        if (!AndroidSettingsBridge.TryReadRaw(out var json) || string.IsNullOrWhiteSpace(json))
+            json = "{}";
+        var node = System.Text.Json.Nodes.JsonNode.Parse(json)?.AsObject() ?? new System.Text.Json.Nodes.JsonObject();
+        var previousJson = node.ToJsonString();
+        node[key] = value switch
+        {
+            string s => s,
+            int i => i,
+            ushort u => u,
+            ulong ul => ul.ToString(),
+            _ => value?.ToString(),
+        };
+        var nextJson = node.ToJsonString();
+        if (!string.Equals(previousJson, nextJson, StringComparison.Ordinal))
+            AndroidSettingsBridge.TryWriteRaw(node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private static void ConfigureLanJoinScreen(NJoinFriendScreen screen)
+    {
+        var title = screen.GetNodeOrNull<MegaLabel>("TitleLabel");
+        title?.SetTextAutoSize(T("加入局域网游戏", "Join LAN Game"));
+
+        var buttonContainer = screen.GetNodeOrNull<Control>("%ButtonContainer");
+        if (buttonContainer != null)
+            buttonContainer.Visible = false;
+        var loading = screen.GetNodeOrNull<Control>("%LoadingIndicator");
+        if (loading != null)
+            loading.Visible = false;
+        var noFriends = screen.GetNodeOrNull<Control>("%NoFriendsText");
+        if (noFriends != null)
+            noFriends.Visible = false;
+
+        var panel = screen.GetNode<Control>("Panel");
+        var container = panel.GetNodeOrNull<VBoxContainer>("LanJoinContainer") ?? CreateLanJoinContainer(panel);
+        container.Visible = true;
+
+        var helpLabel = container.GetNodeOrNull<MegaLabel>("LanHelpLabel");
+        helpLabel?.SetTextAutoSize(T($"房主先在同一 Wi‑Fi / 局域网内开房，然后在这里输入房主 IP 和端口加入。默认端口：{DefaultPort}。也可以直接输入 IP:端口。", $"Host a game on the same Wi‑Fi / LAN, then enter the host IP and port here. Default port: {DefaultPort}. You can also enter IP:port."));
+
+        var hostInput = container.GetNode<LineEdit>("LanHostRow/LanHostInput");
+        var portInput = container.GetNode<LineEdit>("LanPortRow/LanPortInput");
+        hostInput.PlaceholderText = "192.168.0.123";
+        portInput.PlaceholderText = DefaultPort.ToString();
+        hostInput.Text = GetSavedJoinHost();
+        portInput.Text = GetSavedJoinPort().ToString();
+
+        var refreshButton = screen.GetNodeOrNull<NJoinFriendRefreshButton>("RefreshButton");
+        if (refreshButton != null)
+        {
+            var label = refreshButton.GetNodeOrNull<MegaLabel>("Label");
+            label?.SetTextAutoSize(T("加入", "Join"));
+            var icon = refreshButton.GetNodeOrNull<Control>("ControllerIcon");
+            if (icon != null)
+                icon.Visible = false;
+        }
+
+        ReplaceLineSubmitted(hostInput, _ => TaskHelper.RunSafely(JoinLanGameAsync(screen, hostInput, portInput)));
+        ReplaceLineSubmitted(portInput, _ => TaskHelper.RunSafely(JoinLanGameAsync(screen, hostInput, portInput)));
+        hostInput.CallDeferred(Control.MethodName.GrabFocus);
+    }
+
+    private static VBoxContainer CreateLanJoinContainer(Control panel)
+    {
+        var container = new VBoxContainer
+        {
+            Name = "LanJoinContainer",
+            UniqueNameInOwner = true,
+            AnchorLeft = 0.5f,
+            AnchorTop = 0.5f,
+            AnchorRight = 0.5f,
+            AnchorBottom = 0.5f,
+            OffsetLeft = -332,
+            OffsetTop = -8,
+            OffsetRight = 332,
+            OffsetBottom = 202,
+            GrowHorizontal = Control.GrowDirection.Both,
+            GrowVertical = Control.GrowDirection.Both,
+        };
+        container.AddThemeConstantOverride("separation", 18);
+
+        var help = MakeMegaLabel("LanHelpLabel", T("输入房主局域网 IP 和端口加入。", "Join the host by entering their LAN IP and port."), 26, Colors.White);
+        help.CustomMinimumSize = new Vector2(0, 72);
+        help.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        container.AddChild(help);
+        container.AddChild(MakeInputRow("LanHostRow", "LanHostLabel", T("房主 IP", "Host IP"), "LanHostInput", false));
+        container.AddChild(MakeInputRow("LanPortRow", "LanPortLabel", T("端口", "Port"), "LanPortInput", true));
+        panel.AddChild(container);
+        AndroidFontCoveragePatches.RegisterTreePostfix(container);
+        return container;
+    }
+
+    private static HBoxContainer MakeInputRow(string rowName, string labelName, string labelText, string inputName, bool numeric)
+    {
+        var row = new HBoxContainer { Name = rowName };
+        row.AddThemeConstantOverride("separation", 18);
+        var label = MakeMegaLabel(labelName, labelText, 28, new Color(0.937255f, 0.784314f, 0.317647f));
+        label.CustomMinimumSize = new Vector2(120, 0);
+        label.VerticalAlignment = VerticalAlignment.Center;
+        row.AddChild(label);
+        var input = new LineEdit
+        {
+            Name = inputName,
+            UniqueNameInOwner = true,
+            CustomMinimumSize = new Vector2(0, 48),
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            MaxLength = numeric ? 5 : 128,
+        };
+        input.AddThemeFontSizeOverride("font_size", 24);
+        row.AddChild(input);
+        return row;
+    }
+
+    private static Label MakeMegaLabel(string name, string text, int fontSize, Color color)
+    {
+        // Use a plain Label for programmatic LAN helper text.  MegaLabel requires
+        // a per-node theme font override in _Ready(); creating it without one
+        // logs engine errors on Android.
+        var label = new Label { Name = name, Text = text };
+        label.AddThemeColorOverride("font_color", color);
+        label.AddThemeColorOverride("font_outline_color", Colors.Black);
+        label.AddThemeConstantOverride("outline_size", 6);
+        label.AddThemeFontSizeOverride("font_size", fontSize);
+        return label;
+    }
+
+    private static bool TryGetLanInputs(NJoinFriendScreen screen, out LineEdit hostInput, out LineEdit portInput)
+    {
+        hostInput = null;
+        portInput = null;
+        var container = screen.GetNodeOrNull<VBoxContainer>("Panel/LanJoinContainer");
+        if (container?.Visible != true)
+            return false;
+        hostInput = container.GetNodeOrNull<LineEdit>("LanHostRow/LanHostInput");
+        portInput = container.GetNodeOrNull<LineEdit>("LanPortRow/LanPortInput");
+        return hostInput != null && portInput != null;
+    }
+
+    private static void ReplaceLineSubmitted(LineEdit input, Action<string> action)
+    {
+        try
+        {
+            if (input.HasMeta("sts2_mobile_lan_submit_connected"))
+                return;
+            input.SetMeta("sts2_mobile_lan_submit_connected", true);
+            input.Connect(LineEdit.SignalName.TextSubmitted, Callable.From<string>(value => action(value)));
+        }
+        catch
+        {
+        }
+    }
+
+    private static async Task JoinLanGameAsync(NJoinFriendScreen screen, LineEdit hostInput, LineEdit portInput)
+    {
+        if (!TryParseEndpoint(hostInput.Text, portInput.Text, out var host, out var port, out var error))
+        {
+            ShowInfoPopup(T("无法加入局域网房间", "Unable to join LAN game"), error);
+            return;
+        }
+        hostInput.Text = host;
+        portInput.Text = port.ToString();
+        SaveJoinEndpoint(host, port);
+#if STS2_TARGET_1110
+        var joinFlow = new JoinFlow(new NetClientGameService(PeerVersionInfo.LocalDefault()));
+#elif STS2_TARGET_1080 || STS2_TARGET_1090 || STS2_TARGET_1100
+        var joinFlow = new JoinFlow(new NetClientGameService());
+#else
+        var joinFlow = new JoinFlow();
+#endif
+        AccessTools.Field(typeof(NJoinFriendScreen), "_currentJoinFlow")?.SetValue(screen, joinFlow);
+        await InvokeJoinGameAsync(screen, joinFlow, new ENetClientConnectionInitializer(GetOrCreateLocalPeerId(), host, port));
+    }
+
+    private static async Task InvokeJoinGameAsync(NJoinFriendScreen screen, JoinFlow joinFlow, IClientConnectionInitializer initializer)
+    {
+        var method = typeof(NJoinFriendScreen).GetMethod("JoinGameAsync", BindingFlags.Public | BindingFlags.Instance);
+        if (method != null)
+        {
+            await (Task)method.Invoke(screen, new object[] { initializer });
+            return;
+        }
+        var result = await joinFlow.Begin(initializer, screen.GetTree());
+        throw new NotSupportedException($"JoinGameAsync reflection target missing; manual fallback for state {result.sessionState} is not implemented.");
+    }
+
+    private static NetHostGameService CreateNetHostGameService()
+    {
+#if STS2_TARGET_1110
+        return new NetHostGameService(PeerVersionInfo.LocalDefault());
+#else
+        return new NetHostGameService();
+#endif
+    }
+
+    private static Task StartHostFromSubmenuAsync(GameMode gameMode, Control loadingOverlay, NSubmenuStack stack)
+    {
+        var platformType = PlatformType.None;
+        var hostCapacity = GetHostCapacityForPlatform(platformType, GetConfiguredHostMaxPlayers());
+        loadingOverlay.Visible = true;
+        try
+        {
+            var netService = CreateNetHostGameService();
+            var error = netService.StartENetHost(DefaultPort, hostCapacity);
+            if (!error.HasValue)
+            {
+                switch (gameMode)
+                {
+                    case GameMode.Standard:
+                        var character = stack.GetSubmenuType<MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect.NCharacterSelectScreen>();
+                        character.InitializeMultiplayerAsHost(netService, hostCapacity);
+                        stack.Push(character);
+                        break;
+                    case GameMode.Daily:
+                        var daily = stack.GetSubmenuType<MegaCrit.Sts2.Core.Nodes.Screens.DailyRun.NDailyRunScreen>();
+                        daily.InitializeMultiplayerAsHost(netService);
+                        stack.Push(daily);
+                        break;
+                    default:
+                        var custom = stack.GetSubmenuType<MegaCrit.Sts2.Core.Nodes.Screens.CustomRun.NCustomRunScreen>();
+                        custom.InitializeMultiplayerAsHost(netService, hostCapacity);
+                        stack.Push(custom);
+                        break;
+                }
+                ShowLanHostInfo();
+            }
+            else
+            {
+                AddModal(NErrorPopup.Create(error.Value));
+            }
+        }
+        catch (Exception exception)
+        {
+            PatchHelper.Log($"LAN host failed: {exception}");
+            AddModal(NErrorPopup.Create(new NetErrorInfo(NetError.InternalError, selfInitiated: false)));
+            throw;
+        }
+        finally
+        {
+            loadingOverlay.Visible = false;
+        }
+        return Task.CompletedTask;
+    }
+
+    private static Task StartLoadedHostAsync(object multiplayerSubmenu, SerializableRun run)
+    {
+        var loadingOverlay = (Control)AccessTools.Field(multiplayerSubmenu.GetType(), "_loadingOverlay")?.GetValue(multiplayerSubmenu);
+        var stack = (NSubmenuStack)AccessTools.Field(typeof(NSubmenu), "_stack")?.GetValue(multiplayerSubmenu);
+        if (loadingOverlay == null || stack == null)
+            throw new InvalidOperationException("Could not reflect multiplayer submenu loading overlay/stack.");
+
+        var hostCapacity = GetHostCapacityForPlatform(PlatformType.None, Math.Max(GetConfiguredHostMaxPlayers(), run.Players.Count));
+        loadingOverlay.Visible = true;
+        try
+        {
+            var netService = CreateNetHostGameService();
+            var error = netService.StartENetHost(DefaultPort, hostCapacity);
+            if (!error.HasValue)
+            {
+                switch (GetRunGameMode(run))
+                {
+                    case GameMode.Daily:
+                        var daily = stack.GetSubmenuType<MegaCrit.Sts2.Core.Nodes.Screens.DailyRun.NDailyRunLoadScreen>();
+                        daily.InitializeAsHost(netService, run);
+                        stack.Push(daily);
+                        break;
+                    case GameMode.Custom:
+                        var custom = stack.GetSubmenuType<MegaCrit.Sts2.Core.Nodes.Screens.CustomRun.NCustomRunLoadScreen>();
+                        custom.InitializeAsHost(netService, run);
+                        stack.Push(custom);
+                        break;
+                    default:
+                        var standard = stack.GetSubmenuType<MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect.NMultiplayerLoadGameScreen>();
+                        standard.InitializeAsHost(netService, run);
+                        stack.Push(standard);
+                        break;
+                }
+                ShowLanHostInfo();
+            }
+            else
+            {
+                AddModal(NErrorPopup.Create(error.Value));
+            }
+        }
+        finally
+        {
+            loadingOverlay.Visible = false;
+        }
+        return Task.CompletedTask;
+    }
+
+    private static GameMode GetRunGameMode(SerializableRun run)
+    {
+        var property = run.GetType().GetProperty("GameMode", BindingFlags.Public | BindingFlags.Instance);
+        if (property?.GetValue(run) is GameMode gameMode)
+            return gameMode;
+        return GameMode.Standard;
+    }
+
+    private static void ShowLanHostInfo()
+    {
+        if (RemoteRoomPatches.HostingOnlineRoom)
+        {
+            AddModal(NErrorPopup.Create(T("联机房间已开启", "Online Room Ready"), T("朋友在启动器「联机小屋」的在线房间列表里就能看到并加入你的房间。", "Friends can find and join your room in the launcher's Online Cottage room list."), showReportBugButton: false));
+            return;
+        }
+        AddModal(NErrorPopup.Create(T("局域网房间已开启", "LAN Host Ready"), BuildHostInstructions(DefaultPort), showReportBugButton: false));
+    }
+
+    private static string BuildHostInstructions(ushort port)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(T("局域网房间已开启。", "LAN game is ready."));
+        builder.AppendLine(T("其他玩家在同一 Wi‑Fi / 局域网下输入下面任一地址即可加入：", "Other players on the same Wi‑Fi / LAN can join with one of these addresses:"));
+        builder.AppendLine();
+        var addresses = GetLocalIpv4Addresses().ToArray();
+        if (addresses.Length == 0)
+        {
+            builder.AppendLine(T($"端口：{port}", $"Port: {port}"));
+            builder.AppendLine(T("未能自动识别本机局域网 IP，请在系统网络设置里查看本机 IP 后，使用 <IP>:<端口> 加入。", "Could not detect this device's LAN IP. Check system network settings and use <IP>:<port>."));
+        }
+        else
+        {
+            foreach (var address in addresses)
+                builder.AppendLine($"{address}:{port}");
+        }
+        return builder.ToString().TrimEnd();
+    }
+
+    private static IEnumerable<string> GetLocalIpv4Addresses()
+    {
+        var ips = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            foreach (var network in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (network.OperationalStatus != OperationalStatus.Up || network.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+                    continue;
+                foreach (var addressInfo in network.GetIPProperties().UnicastAddresses)
+                {
+                    var address = addressInfo.Address;
+                    if (address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(address))
+                    {
+                        var text = address.ToString();
+                        if (!text.StartsWith("169.254.", StringComparison.Ordinal))
+                            ips.Add(text);
+                    }
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            PatchHelper.Log($"Failed to enumerate LAN IPs: {exception.Message}");
+        }
+        return ips.OrderBy(ip => ip, StringComparer.Ordinal);
+    }
+
+    private static void SetPlayerNameOverride(PlatformType platformType, ulong playerId, string playerName)
+    {
+        if (string.IsNullOrWhiteSpace(playerName))
+        {
+            if (PlayerNameOverrides.TryGetValue(platformType, out var values))
+                values.Remove(playerId);
+            return;
+        }
+        if (!PlayerNameOverrides.TryGetValue(platformType, out var map))
+        {
+            map = new Dictionary<ulong, string>();
+            PlayerNameOverrides[platformType] = map;
+        }
+        map[playerId] = playerName.Trim();
+    }
+
+    private static bool TryGetPlayerNameOverride(PlatformType platformType, ulong playerId, out string playerName)
+    {
+        playerName = null;
+        return PlayerNameOverrides.TryGetValue(platformType, out var map) && map.TryGetValue(playerId, out playerName) && !string.IsNullOrWhiteSpace(playerName);
+    }
+
+    private static void ClearPlayerNameOverrides(PlatformType platformType)
+    {
+        PlayerNameOverrides.Remove(platformType);
+        SetPlayerNameOverride(platformType, PlatformUtil.GetLocalPlayerId(platformType), GetConfiguredPlayerDisplayName());
+    }
+
+    private static void ShowInfoPopup(string title, string body)
+    {
+        AddModal(NErrorPopup.Create(title, body, showReportBugButton: false));
+    }
+
+    private static void AddModal(Node popup)
+    {
+        if (popup != null)
+            NModalContainer.Instance.Add(popup);
+    }
+}

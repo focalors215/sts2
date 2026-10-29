@@ -1,0 +1,376 @@
+using System;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using Godot;
+using HarmonyLib;
+
+namespace STS2Mobile.Patches;
+
+// Replaces the desktop resolution dropdown with a UI scale selector for mobile.
+// Persists the scale percentage to user://ui_scale.cfg. DisplaySettingsPatches is the
+// sole ContentScale coordinator; this patch only supplies the Auto-mode target and
+// requests a coalesced recalculation when the scale or window changes.
+public static class UiScalePatches
+{
+    public static int UiScalePercent { get; private set; } = 100;
+    private static event Action UiScaleChanged;
+    private static readonly ConditionalWeakTable<Node, ScaleSubscription> ScaleSubscriptions = new();
+    private static bool _uiScaleLoaded = false;
+
+    internal static void ObserveScale(Node owner, Action apply)
+    {
+        if (!ScaleSubscriptions.TryGetValue(owner, out var subscription))
+        {
+            subscription = new ScaleSubscription(owner);
+            ScaleSubscriptions.Add(owner, subscription);
+        }
+        subscription.Update(owner, apply);
+    }
+
+    private sealed class ScaleSubscription
+    {
+        private Action _apply;
+        private bool _subscribed;
+
+        internal ScaleSubscription(Node owner)
+        {
+            owner.TreeEntered += Subscribe;
+            owner.TreeExiting += Unsubscribe;
+        }
+
+        internal void Update(Node owner, Action apply)
+        {
+            _apply = apply;
+            if (owner.IsInsideTree())
+                Subscribe();
+        }
+
+        private void Subscribe()
+        {
+            if (_subscribed)
+                return;
+            UiScaleChanged += Apply;
+            _subscribed = true;
+        }
+
+        private void Unsubscribe()
+        {
+            UiScaleChanged -= Apply;
+            _subscribed = false;
+        }
+
+        private void Apply() => _apply();
+    }
+
+    public static void Apply(Harmony harmony)
+    {
+        var sts2Asm = typeof(MegaCrit.Sts2.Core.Nodes.NGame).Assembly;
+
+        var resDropdownType = sts2Asm.GetType(
+            "MegaCrit.Sts2.Core.Nodes.Screens.Settings.NResolutionDropdown"
+        );
+        if (resDropdownType != null)
+        {
+            PatchHelper.Patch(
+                harmony,
+                resDropdownType,
+                "RefreshEnabled",
+                prefix: PatchHelper.Method(typeof(UiScalePatches), nameof(RefreshEnabledPrefix))
+            );
+
+            PatchHelper.Patch(
+                harmony,
+                resDropdownType,
+                "PopulateDropdownItems",
+                prefix: PatchHelper.Method(typeof(UiScalePatches), nameof(PopulateScaleItemsPrefix))
+            );
+
+            PatchHelper.Patch(
+                harmony,
+                resDropdownType,
+                "RefreshCurrentlySelectedResolution",
+                prefix: PatchHelper.Method(typeof(UiScalePatches), nameof(RefreshScaleLabelPrefix))
+            );
+
+            PatchHelper.Patch(
+                harmony,
+                resDropdownType,
+                "OnDropdownItemSelected",
+                prefix: PatchHelper.Method(typeof(UiScalePatches), nameof(ScaleItemSelectedPrefix))
+            );
+        }
+
+        var resItemType = sts2Asm.GetType(
+            "MegaCrit.Sts2.Core.Nodes.Screens.Settings.NResolutionDropdownItem"
+        );
+        if (resItemType != null)
+        {
+            PatchHelper.Patch(
+                harmony,
+                resItemType,
+                "Init",
+                prefix: PatchHelper.Method(typeof(UiScalePatches), nameof(ResolutionItemInitPrefix))
+            );
+        }
+
+        var settingsScreenType = sts2Asm.GetType(
+            "MegaCrit.Sts2.Core.Nodes.Screens.Settings.NSettingsScreen"
+        );
+        if (settingsScreenType != null)
+        {
+            PatchHelper.Patch(
+                harmony,
+                settingsScreenType,
+                "LocalizeLabels",
+                postfix: PatchHelper.Method(typeof(UiScalePatches), nameof(LocalizeLabelsPostfix))
+            );
+        }
+
+        var globalUiType = sts2Asm.GetType("MegaCrit.Sts2.Core.Nodes.CommonUi.NGlobalUi");
+        if (globalUiType != null)
+        {
+            PatchHelper.Patch(
+                harmony,
+                globalUiType,
+                "OnWindowChange",
+                prefix: PatchHelper.Method(
+                    typeof(UiScalePatches),
+                    nameof(GlobalUiWindowChangePrefix)
+                )
+            );
+        }
+
+        var mainMenuType = sts2Asm.GetType("MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NMainMenu");
+        if (mainMenuType != null)
+        {
+            PatchHelper.Patch(
+                harmony,
+                mainMenuType,
+                "OnWindowChange",
+                prefix: PatchHelper.Method(
+                    typeof(UiScalePatches),
+                    nameof(MainMenuWindowChangePrefix)
+                )
+            );
+        }
+    }
+
+    public static void EnsureUiScaleLoaded()
+    {
+        if (_uiScaleLoaded)
+            return;
+        _uiScaleLoaded = true;
+        try
+        {
+            var path = ProjectSettings.GlobalizePath("user://ui_scale.cfg");
+            if (System.IO.File.Exists(path))
+            {
+                if (
+                    int.TryParse(System.IO.File.ReadAllText(path).Trim(), out int val)
+                    && val >= 100
+                    && val <= 200
+                )
+                    UiScalePercent = val;
+            }
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private static void SaveUiScale()
+    {
+        try
+        {
+            var path = ProjectSettings.GlobalizePath("user://ui_scale.cfg");
+            System.IO.File.WriteAllText(path, UiScalePercent.ToString());
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    internal static Vector2I GetScaledContentSize()
+    {
+        EnsureUiScaleLoaded();
+        float scale = UiScalePercent / 100f;
+        return new Vector2I(
+            (int)Math.Round(1680.0 / scale),
+            (int)Math.Round(1080.0 / scale)
+        );
+    }
+
+    public static void ApplyUiScale()
+    {
+        EnsureUiScaleLoaded();
+        try
+        {
+            var window = ((SceneTree)Engine.GetMainLoop()).Root;
+            DisplaySettingsPatches.ApplyUiScaleContentScaleSettings();
+            PatchHelper.Log(
+                $"UI Scale: {UiScalePercent}% -> owner={DisplaySettingsPatches.CurrentContentScaleOwner}, ContentScaleSize {window.ContentScaleSize}"
+            );
+            UiScaleChanged?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"Failed to apply UI scale: {ex.Message}");
+        }
+    }
+
+    // Always enable the dropdown since mobile has no windowed/fullscreen toggle.
+    public static bool RefreshEnabledPrefix(object __instance)
+    {
+        try
+        {
+            var enableMethod = AccessTools.Method(__instance.GetType(), "Enable");
+            enableMethod?.Invoke(__instance, null);
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"{ex.GetType().Name}: {ex.Message}");
+        }
+        return false;
+    }
+
+    // Replaces resolution entries with scale percentage options (100% to 150%).
+    public static bool PopulateScaleItemsPrefix(object __instance)
+    {
+        try
+        {
+            var instType = __instance.GetType();
+            AccessTools.Method(instType, "ClearDropdownItems").Invoke(__instance, null);
+
+            var dropdownItems = (Node)
+                AccessTools.Field(instType, "_dropdownItems").GetValue(__instance);
+            var scene = (PackedScene)
+                AccessTools.Field(instType, "_dropdownItemScene").GetValue(__instance);
+
+            int[] scales = { 100, 110, 120, 130, 140, 150 };
+            foreach (int scale in scales)
+            {
+                var item = scene.Instantiate(PackedScene.GenEditState.Disabled);
+                dropdownItems.AddChild(item);
+                item.Connect(
+                    "Selected",
+                    new Callable((GodotObject)__instance, "OnDropdownItemSelected")
+                );
+                item.Call("Init", new Vector2I(scale, 0));
+            }
+
+            dropdownItems.GetParent().Call("RefreshLayout");
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"PopulateScaleItems failed: {ex.Message}");
+        }
+        return false;
+    }
+
+    // Shows the current scale percentage in the dropdown label.
+    public static bool RefreshScaleLabelPrefix(object __instance)
+    {
+        EnsureUiScaleLoaded();
+        try
+        {
+            var label = (GodotObject)
+                AccessTools.Field(__instance.GetType(), "_currentOptionLabel").GetValue(__instance);
+            label.Call("SetTextAutoSize", $"{UiScalePercent}%");
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"{ex.GetType().Name}: {ex.Message}");
+        }
+        return false;
+    }
+
+    // Applies the selected scale, saves it, and updates the label.
+    public static bool ScaleItemSelectedPrefix(object __instance, object nDropdownItem)
+    {
+        try
+        {
+            var resField = AccessTools.Field(nDropdownItem.GetType(), "resolution");
+            var resolution = (Vector2I)resField.GetValue(nDropdownItem);
+            if (resolution.Y != 0)
+                return true;
+
+            int newScale = resolution.X;
+            if (newScale == UiScalePercent)
+                return false;
+
+            AccessTools.Method(__instance.GetType(), "CloseDropdown").Invoke(__instance, null);
+
+            UiScalePercent = newScale;
+            SaveUiScale();
+            ApplyUiScale();
+
+            var label = (GodotObject)
+                AccessTools.Field(__instance.GetType(), "_currentOptionLabel").GetValue(__instance);
+            label.Call("SetTextAutoSize", $"{UiScalePercent}%");
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"ScaleItemSelected failed: {ex.Message}");
+        }
+        return false;
+    }
+
+    // Initializes dropdown items with scale percentage text instead of resolution.
+    public static bool ResolutionItemInitPrefix(object __instance, Vector2I setResolution)
+    {
+        if (setResolution.Y != 0)
+            return true;
+
+        try
+        {
+            AccessTools
+                .Field(__instance.GetType(), "resolution")
+                .SetValue(__instance, setResolution);
+            var label = (GodotObject)
+                AccessTools.Field(__instance.GetType(), "_label").GetValue(__instance);
+            label.Call("SetTextAutoSize", $"{setResolution.X}%");
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"{ex.GetType().Name}: {ex.Message}");
+        }
+        return false;
+    }
+
+    // Renames the "Resolution" label to "UI Scale" in the settings screen.
+    public static void LocalizeLabelsPostfix(object __instance)
+    {
+        try
+        {
+            var screen = (Node)__instance;
+            var graphicsPanel = screen.GetNode("%GraphicsSettings");
+            var content = (Node)((GodotObject)graphicsPanel).Get("Content");
+            var resNode = content.GetNode("WindowedResolution");
+            var label = (GodotObject)resNode.GetNode("Label");
+            label.Set("text", "UI Scale");
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"LocalizeLabels postfix failed: {ex.Message}");
+        }
+    }
+
+    // Suppresses the original window handler's ContentScale writes and lets the
+    // coordinator recalculate once after the current notification sequence.
+    public static bool GlobalUiWindowChangePrefix(object __instance)
+    {
+        EnsureUiScaleLoaded();
+        DisplaySettingsPatches.RequestDeferredContentScaleApply("NGlobalUi.OnWindowChange");
+        return false;
+    }
+
+    // Handles window changes on the main menu through the same single coordinator.
+    public static bool MainMenuWindowChangePrefix(object __instance, bool isAspectRatioAuto)
+    {
+        EnsureUiScaleLoaded();
+        DisplaySettingsPatches.RequestDeferredContentScaleApply("NMainMenu.OnWindowChange");
+        return false;
+    }
+}
