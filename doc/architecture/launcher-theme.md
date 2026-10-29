@@ -1,6 +1,6 @@
 # 启动器主题：喵喵零和小鱼的小屋
 
-Android 启动器与 iPad 原生启动器（`sts2-ios/ios-export/launcher/`）使用同一套前端：同一张主页插画、夜间小屋配色、描边标题和代码绘制的吉祥物。
+Android 启动器、iPad 原生启动器（`sts2-ios/ios-export/launcher/`）与 Windows 启动器（`windows/`）使用同一套前端：同一张主页插画、夜间小屋配色、描边标题和代码绘制的吉祥物。
 
 ## 布局
 
@@ -21,5 +21,18 @@ Android 启动器与 iPad 原生启动器（`sts2-ios/ios-export/launcher/`）�
 | `android/src/com/godot/game/ExtraSettingsUi.java` | 通用组件配色已映射到 `CottageTheme`，原有各页面随之换肤。 |
 | `android/res/drawable-nodpi/launcher_home.jpg` | 主页插画（与 iPad 启动器相同）。 |
 | `android/res/values*/strings_cottage.xml` | 主题文案（中文与英文默认）。 |
+
+### Windows 启动器
+
+`windows/` 是 Electron 应用，界面用 HTML/CSS 复刻同一套主题，布局阈值与 Android 相同（以窗口 CSS 像素代替 dp）：
+
+| 文件 | 作用 |
+| --- | --- |
+| `windows/src/renderer/styles.css` | 配色 token（与 `CottageTheme` 常量一一对应）、描边标题、侧栏/胶囊标签、卡片、按钮。 |
+| `windows/src/renderer/app.js` | 外壳与各页面；`HOTSPOTS`、`BRAND_RECT`、`POSTCARD_RECT`、`CONTENT_TOP/BOTTOM` 与 `CottageHomeStage` / `CottageTheme` 相同，插画裁片用 CSS 背景定位。 |
+| `windows/src/renderer/mascot.js` | 吉祥物与猫爪的 SVG 版本，坐标与 `MascotView` / `PawDrawable` 相同。 |
+| `windows/src/renderer/i18n.js` | 主题文案（中文 / 英文），与 `strings_cottage.xml` 用语一致。 |
+
+插画、图标和 Material Symbols 字体不复制进 `windows/`，构建时由 `windows/scripts/prepare-assets.js` 从 `android/res/` 拷贝。改插画或热区时三端一起改。
 
 插画由项目作者为本启动器生成，不含游戏素材；吉祥物为纯代码绘制的原创形象。

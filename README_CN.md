@@ -169,6 +169,13 @@ MOD，启动器不内置竖屏界面。配合更新后的 full compat，竖屏�
 高度跟随实际竖屏画面比例。原先的横屏比例和 UI 缩放选择保留，但竖屏期间不覆盖该画布；
 游戏缩放与字体缩放仍独立生效。切回横屏后恢复保存的比例/UI 缩放，渲染分辨率仍是独立设置。
 
+### 7. Windows 启动器
+`windows/` 是 Windows 版启动器（Electron），界面与 Android、iPad 启动器同为「喵喵零和小鱼的小屋」。Windows 直接运行 PC 原版游戏，启动器负责找到游戏（Steam 库或手动目录）、通过 `settings.save` 管理 MOD、存档快照并启动游戏。只需要 Node.js 22：
+```bash
+tools/package/build_windows_launcher.sh
+```
+详见 [`windows/README.md`](windows/README.md)。
+
 
 ---
 

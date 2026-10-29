@@ -7,8 +7,8 @@ changelog 主要用于记录 agent 修改过程、验证流水和本地接力信
 ## 文档地图
 
 - [`architecture/project-structure.md`](architecture/project-structure.md)：仓库结构、目录职责、运行时私有目录、版本/兼容包模型。
-- [`architecture/launcher-theme.md`](architecture/launcher-theme.md)：启动器主题「喵喵零和小鱼的小屋」：与 iPad 启动器一致的插画主页、侧栏/顶部标签布局与代码位置。
-- [`build/building-and-packaging.md`](build/building-and-packaging.md)：本地环境、构建脚本、导入版/直装版 APK、兼容包打包。
+- [`architecture/launcher-theme.md`](architecture/launcher-theme.md)：启动器主题「喵喵零和小鱼的小屋」：与 iPad / Windows 启动器一致的插画主页、侧栏/顶部标签布局与代码位置。
+- [`build/building-and-packaging.md`](build/building-and-packaging.md)：本地环境、构建脚本、导入版/直装版 APK、兼容包打包、Windows 启动器。
 - [`build/adb-automation-debugging.md`](build/adb-automation-debugging.md)：连接 ADB 设备后的自动化调试、安装、导入、启动、日志和性能采集脚本。
 - [`build/local-configuration.md`](build/local-configuration.md)：`.env` / `local.properties` 本地配置、路径迁移和 CI 配置建议。
 - [`runtime/compat-pack-loading-flow.md`](runtime/compat-pack-loading-flow.md)：Android 兼容包、`STS2Mobile.dll`、`port_compat.pck` 与普通 MOD 的详细加载流程。

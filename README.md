@@ -235,6 +235,13 @@ tools/debug/sts2-adb-debug.sh launch --mode perf --preload aggressive --logcat-d
 ```
 See [`doc/build/adb-automation-debugging.md`](doc/build/adb-automation-debugging.md) for targeted MOD/compat/preload scenarios.
 
+### 8. Windows Launcher
+`windows/` contains a Windows launcher (Electron) with the same "Meow Zero & Little Fish's Cottage" front end as the Android and iPad launchers. On Windows the original PC game runs natively, so the launcher only finds the game (Steam libraries or manual folders), manages mods through `settings.save`, takes save snapshots and launches the game. It only needs Node.js 22:
+```bash
+tools/package/build_windows_launcher.sh
+```
+See [`windows/README.md`](windows/README.md).
+
 ---
 
 ## More Documentation
