@@ -36,7 +36,12 @@ Android 侧拆成三层维护：
    - legacy schema 1 兼容包 zip 形态为：`compat_manifest.json` + `STS2Mobile.dll` + `port_compat.pck` + `SHA256SUMS`。
    - flat schema 2 family 包 zip 形态为：`compat_manifest.json` + `variants/<target_id>/STS2Mobile.dll` + `variants/<target_id>/port_compat.pck` + `SHA256SUMS`；启动配置用 `compat_pack_id` + `compat_target_id` 指向具体 variant。
    - 兼容包不是普通用户 MOD；它由 launcher/Godot runtime 在游戏早期加载，用来 patch 原版 PC 程序集并让普通 MOD 系统在 Android 上工作。
-4. **通用离线启动层 / offline bootstrap**
+4. **Windows 启动器（`windows/`）**
+   - Electron 应用，与 Android / iPad 共用「喵喵零和小鱼的小屋」前端（插画热区、配色、描边标题、吉祥物与 Android `CottageTheme` / `CottageHomeStage` 同坐标，见 `doc/architecture/launcher-theme.md`）。
+   - Windows 直接运行 PC 原版，不使用兼容包/payload store；启动配置 = 游戏目录（Steam 库自动检测或手动），MOD 在 `<游戏目录>/mods/`，开关写当前存档账号 `settings.save` 的 `mod_settings`（与 Android 同一协议），存档默认 `%APPDATA%\SlayTheSpire2`，快照放启动器 userData。
+   - 插画/字体/图标只在 `android/res/`、`doc/images/` 保留一份，`windows/scripts/prepare-assets.js` 复制到 ignored 的 `windows/assets/generated/`；改主题时三端同步。
+   - 构建：`tools/package/build_windows_launcher.sh`（Linux 出便携 zip，Windows/Wine 另出 NSIS 安装包；CI 为 `.github/workflows/windows-launcher.yml`），后端测试 `cd windows && npm test`。
+5. **通用离线启动层 / offline bootstrap**
    - `offline-bootstrap/src/STS2OfflineBootstrap` 编译输出同名 `STS2Mobile.dll`，只为复用 patched runtime 入口 ABI；`ModelDbRuntimeContract` 按 API 形状解析无参 `ModelDb.Init()` 与默认 null `Init(Type[]?)`，显式注入集合保留原版路径，未知参数/返回语义拒绝接管。
    - `offline-bootstrap/overlay` 打包输出最小有效 `port_compat.pck`，默认不替换游戏资源。
    - schema 2 zip 形态为：`compat_manifest.json` + `variants/offline-any/STS2Mobile.dll` + `variants/offline-any/port_compat.pck` + `SHA256SUMS`，manifest 必须声明 `pack_kind=offline-bootstrap`、`match_mode=offline-wildcard`、`versions=["*"]`；当前 `compat_version=0.2.0-dev`、`probe_contract=offline-bootstrap-v2`。
@@ -149,6 +154,11 @@ s2_re/
     overlay/                       # 最小有效 overlay，不替换游戏资源
     tools/test-offline-contract.sh # 运行 synthetic + 已配置 original reflection contract gate
     tools/build-offline-pack.sh    # 先跑 contract gate，再构建 sts2-android-offline-bootstrap.zip
+  windows/                         # Windows 启动器（Electron），与 Android/iPad 同一套小屋前端
+    src/main/                      # 主进程：Steam 检测/启动、MOD（settings.save）、存档快照、配置
+    src/renderer/                  # 界面：HTML/CSS/JS 复刻 CottageTheme、插画热区、吉祥物 SVG
+    scripts/prepare-assets.js      # 从 android/res、doc/images 复制共享插画/字体/图标
+    test/                          # node --test 后端单元测试
   tools/
     port_mod_ast_audit.py          # 游戏版本更新后对比两版 C# 语法结构，并把变化映射到 port-mod Harmony/反射触达点
     android/
@@ -171,6 +181,7 @@ s2_re/
       build_android_body_zip.sh    # 上述 Python 工具的环境加载 wrapper
       build_importer_apk.sh        # 构建不内置游戏 zip 的导入版 APK
       build_direct_apk.sh          # 构建临时内置游戏 zip 的直装版 APK
+      build_windows_launcher.sh    # 构建 Windows 启动器 zip（Windows/Wine 下另出安装包）
     debug/
       sts2-adb-debug.sh            # ADB 自动化调试：安装、推送 payload/compat/MOD、准备/启动、日志/Perfetto 采集
     diff/                          # 差异清单工具

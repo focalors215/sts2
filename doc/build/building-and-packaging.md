@@ -591,3 +591,20 @@ Steam credential auth 必须用装有 Steam App 的实机做以下场景，不�
 8. Android 13+ 拒绝通知权限后重复登录；系统可能不在通知栏展示普通通知，但认证状态和可恢复事务不应因此损坏，返回 Steam 中心仍可继续观察或取消。
 
 验证期间同时检查 `adb logcat` 和 app 私有偏好中不存在账号密码、加密密码或本次 Guard code 明文。允许加密保存的内容只有既有登录材料与短期 transaction handle；认证成功必须在同一次 generation-matched commit 中写入 refresh token 并删除 handle，取消、过期或 handle 损坏只删除 pending 状态。
+
+## 15. 构建 Windows 启动器
+
+`windows/` 是独立的 Electron 启动器（与 Android / iPad 同一套「小屋」前端），Windows 直接运行 PC 原版游戏，因此不需要 `.env` 里的 Android SDK、runtime、original 引用或兼容包。只需要 Node.js 22：
+
+```bash
+tools/package/build_windows_launcher.sh
+```
+
+脚本会在 `windows/` 下 `npm ci`（无 `node_modules` 时）、运行 `npm test`、从 `android/res/` / `doc/images/` 复制插画、字体与图标到 ignored 的 `windows/assets/generated/`，再调用 electron-builder：
+
+- Linux/macOS：输出便携版 `dist/windows/sts2-cottage-launcher-<version>-win-x64.zip`。
+- Windows（或装有 Wine）：额外输出 NSIS 安装包 `dist/windows/sts2-cottage-launcher-<version>-win-x64.exe`。
+- CI：`.github/workflows/windows-launcher.yml` 在 `windows-latest` 上构建 zip + 安装包并上传为 artifact，可手动触发。
+
+本地调试界面：`cd windows && npm start`。功能与数据目录说明见 [`windows/README.md`](../../windows/README.md)。
+
