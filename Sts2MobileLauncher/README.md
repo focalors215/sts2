@@ -1,0 +1,255 @@
+
+<div align="right">
+  <strong><a href="README_CN.md">🇨🇳 简体中文 (Chinese)</a></strong>
+</div>
+
+<p align="center">
+  <!-- Replace with your actual app icon path or image URL -->
+  <img src="doc/images/icon.png" width="128" alt="App Icon">
+</p>
+
+<h1 align="center">Slay the Spire 2 Android Launcher</h1>
+
+<p align="center">
+  An unofficial, open-source mobile compatibility layer and launcher environment for <i>Slay the Spire 2</i>, based on the Godot/Mono runtime.
+</p>
+
+<p align="center">
+  <a href="https://github.com/ModinMobileSTS/Sts2MobileLauncher/blob/main/LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
+  </a>
+  <img src="https://img.shields.io/badge/Platform-Android_7.0+-brightgreen.svg" alt="Platform">
+  <img src="https://img.shields.io/badge/Godot-4.5_Mono-478CBF.svg" alt="Godot">
+</p>
+
+## Screenshots
+
+<p align="center">
+  <!-- Please replace the src with actual screenshot paths -->
+  <img src="doc/images/screenshot_1.jpg" width="24%" alt="Home Dashboard">
+  <img src="doc/images/screenshot_2.jpg" width="24%" alt="Steam Download">
+  <img src="doc/images/screenshot_3.jpg" width="24%" alt="MOD Management">
+  <img src="doc/images/screenshot_4.jpg" width="24%" alt="In-game Footage">
+</p>
+
+## About the Project
+
+This project is an experimental, unofficial Android port and launcher framework for *Slay the Spire 2*. It **DOES NOT** contain any base game files. Instead, it provides an Android shell that allows players to import and run their legally owned PC game files on mobile devices, featuring support for Mod loading, Steam Workshop browsing/direct ID or URL opening/download tracking with anonymous public browsing and WorkshopOnAndroid-compatible access fallback, local save snapshots, Steam Cloud and WebDAV save synchronization, and launcher update checks from the About page. When an update is found, the launcher can open either the GitHub release page or the Bilibili dynamic feed.
+
+**The core architecture consists of three layers:**
+1. **Android Launcher Shell (`android/`):** Handles game data importing, Steam login and game downloading, Steam Workshop public browsing, direct ID/URL opening, and download tracking with default compatible-access routing for networks where Steam Community/API or SteamPipe CDN direct connections time out, local save snapshots, Steam Cloud/WebDAV save syncing, and local file/MOD management. Once everything is ready, it boots up the Godot game process.
+The launcher utility pages use a compact dark Material 3 shell, including toolbars, dialogs, and bottom sheets. File Browser provides clickable breadcrumbs, a clipboard banner, name/time/size sorting, add/import actions, and readable contextual multi-select controls. Logs provides source/date filtering and a **Package latest** action that shares the newest live `godot.log` and `sts2.log`, excluding archives. File multi-selection offers share/export; the line-numbered viewer switches between whole-file actions and copy/share/expand-range actions, with working wrap/horizontal-scroll modes, in-file search, and smooth pinch-to-resize text. The Workshop page is unchanged by this UI update.
+The log list scan runs off the UI thread with an iterative traversal that avoids per-directory sorting and unnecessary canonical-path work. It publishes discovered entries in small batches, so the list can populate progressively while a native circular progress indicator and scanning status remain visible until traversal completes.
+2. **Android Compatibility Pack (`port-mod/` submodule):** Acts as a low-level hook (based on Harmony), loaded at the very beginning of the game boot process. It intercepts and fixes various PC-to-Android incompatibilities (e.g., input adaptation, path redirection, PC-specific shader replacement, Mod loader bridging).
+3. **Base Game (Provided by User):** Supplied by the user either by importing the PC version's `SlayTheSpire2.zip` or by legally downloading it via the SteamPipe API after logging into their Steam account within the app.
+
+The log viewer's **LLM analysis** menu opens an optional, separate conversation page. Configure a trusted OpenAI-compatible Chat Completions endpoint, API key, model ID, and optional reasoning effort. Connection settings are encrypted locally. After explicit consent, the first request contains only the question and authorized file metadata; the model explores evidence through bounded `read_lines` and literal `search_logs` tool calls instead of receiving the whole log. Tool results can contain private data, so use a trusted service, preferably over HTTPS. See [module boundaries and usage](doc/architecture/project-structure.md#31-日志分析模块).
+
+The Steam game-download page's **Custom** card supports either a branch name or an exact **ManifestID**. Manifest mode can read the current manifests of visible Steam branches or accept a manually entered ManifestID for the Windows depot (`2868841`); the list is not a historical catalog. Downloads still require an account that owns the game and Steam authorization. Unavailable snapshots do not fall back to another version, and downloading an older build does not guarantee Android compatibility. Use an isolated launch profile for old saves/MODs. See the [Steam download flow](doc/plan/steam/steam-login-download-cloud-plan.md#92-ui-入口).
+
+Steam Cloud and WebDAV keep normal saves (`profile1–3/saves`) and MOD saves (`modded/profile1–3/saves`) separate, including their `profile.save` selectors. A PC UI-only or quick-restart MOD may still select the MOD save directory; syncing does not merge it into normal saves. On a MOD-free phone, back up both save sets, then explicitly use **Extra Settings → MOD Save Transfer → MOD Save → Normal Save** if appropriate. This overwrites destination slots and cannot convert MOD-specific content. See [save path mapping](doc/plan/steam/steam-login-download-cloud-plan.md#102-本地路径映射).
+
+Custom player counts above four remain experimental. The full compatibility pack now dynamically creates treasure relic holders and rest-site character slots, including safe fifth-player focus and distinct treasure award/fight hand placement; this fixes the five-player chest flow that previously stopped after rock-paper-scissors. Other vanilla screens may still contain four-player assumptions, so the configurable capacity is not a guarantee that every player count is supported end to end.
+On Android, the full compatibility pack restores the multiplayer reaction button that is missing from the imported PC scene. It remains available after entering a multiplayer lobby, including the character/ready screen and visible wait overlays, not only after the run has started. Touch and drag from the floating button to choose one of the original reaction-wheel wedges, then release to send it through the payload's existing reaction synchronizer. The wheel is centered on the button in viewport coordinates, and its selection animation keeps a stable neutral position for every wedge after responsive Canvas/UI resizing, so pointing around a full circle no longer shifts the wheel toward the lower-right. On release, the viewport center is converted back to the reaction container's control space before the original local animation and network normalization run, keeping the sent reaction visible under scaled Canvas layouts. The Extra Settings → System switch `Show multiplayer emoji button` controls the button at runtime and defaults to enabled.
+The full compatibility pack also supplies the game's locale-font fallback to Godot popup windows, including `OptionButton` dropdown items and separators. Some Samsung firmware does not reliably select CJK fonts for these separate popup windows; the fix preserves their existing fonts and does not bundle duplicate game fonts.
+
+---
+
+## Legal Disclaimer
+
+- **Unofficial Project:** This is an open-source technical research project created by the player community. It is not affiliated with Mega Crit, *Slay the Spire 2*, or the Godot Engine, nor does it represent their views.
+- **No Game Assets Provided:** This repository **ABSOLUTELY DOES NOT** contain or distribute any copyrighted commercial game assets (including but not limited to audio, images, PCK files, core logic DLLs, etc.).
+- **Legal Use:** Please comply with relevant software licenses, platform rules, and local laws. You must **legally own** a PC copy of *Slay the Spire 2* to use this tool to run the game on your own device.
+- **No Pirated APK Distribution:** Do not use standalone APKs bundled with commercial game assets for public release or commercial monetization.
+
+---
+
+## Credits & References
+
+The creation of this project relies heavily on the explorations of the open-source community. Special thanks to the following projects for their inspiration and code references:
+
+- **[StS2-Launcher_Mod_Manager](https://github.com/iunius612/StS2-Launcher_Mod_Manager)**
+  Provided underlying concepts for stripping the Godot/Mono runtime, Android compatibility patch load orders, and design references for some build scripts.
+- **[SlayTheAmethystModded](https://github.com/ModinMobileSTS/SlayTheAmethystModded)**
+  An unofficial mobile launcher for STS1. The reverse-engineered integration and source code for `steam-protocol`, `steam-content` (SteamPipe game downloads), and Steam Cloud saves in this project are primarily ported/adapted from it.
+  The default-off **Settings → Controls → Floating mouse button** also follows its draggable circular mouse-button design, with independently implemented input handling and artwork. Tap once to arm one right-click; tap again before touching the game to lock right-click mode; tap again to unlock. See [runtime controls](doc/runtime/compat-pack-loading-flow.md).
+- **[WorkshopAndroidDownloader](https://github.com/Apricityx/WorkshopAndroidDownloader)**
+  Android Steam Workshop downloader reference used for the launcher Workshop browsing, download, and update-tracking flow.
+- **[Spire Supply Station / 尖塔补给站](https://workshop.apricityx.top), by apricityx**
+  Optional anonymous Workshop download service. Enable **Download with Spire Supply Station** in Workshop settings (off by default); the About icon beside the switch provides acknowledgements, copyright information and external links. The native downloader does not send Steam login credentials to the service. Site-default content has no verified game branch; see [Workshop download notes](doc/modding/mod-and-compat-notes.md#41-可选的尖塔补给站下载) and the [service terms](https://workshop.apricityx.top/legal/terms).
+- **[STS2-RitsuLib](https://github.com/BAKAOLC/STS2-RitsuLib) / [BaseLib-StS2](https://github.com/Alchyr/BaseLib-StS2)**
+  Served as vital test baseline reference libraries for troubleshooting Android MOD compatibility.
+- **[Google Material Symbols](https://fonts.google.com/icons)**
+  Provides the official rounded icon outlines used by the launcher UI, generated into Android vector drawables from the bundled font.
+- **[Android desugar_jdk_libs](https://github.com/google/desugar_jdk_libs)**
+  Provides Java 8+ library API compatibility (including `java.time`) for Android 7.x devices.
+- **[Godot Engine / Godot.NET.Sdk](https://github.com/godotengine/godot)**
+  Provides the engine and Android template. The test-only Godot.NET.Sdk 4.5.1 harness also exercises native resource preparation and shader lifecycle behavior using synthetic scenes, without commercial game data or additional APK dependencies.
+- **[.NET / Mono](https://github.com/dotnet/runtime) / [Ekyso StS2-Launcher](https://github.com/Ekyso/StS2-Launcher)**
+  The existing custom Android Mono runtime is retained. An **opt-in experimental memory-total repair** changes one SHA-pinned ARM64 instruction, without changing heap limits or the MOD itself. It is not a source rebuild or a complete Android memory-accounting fix; the native library remains unchanged by default. See [scope, test builds and rollback](doc/build/building-and-packaging.md#41-实验性-mono-内存总量修复默认关闭).
+- **[Ekyso Harmony / MonoMod](https://github.com/Ekyso/Harmony)**
+  Runtime staging now removes a legacy native-layout write from the SHA-pinned `MonoMod.Utils.dll`, retaining its managed assembly-resolution cache. The repair is restricted to the verified custom Mono pair and does not modify game or MOD assemblies. Same-version APK upgrades also refresh stale published copies. See [safety scope and verification](doc/build/building-and-packaging.md#42-monomod-原生布局安全修复默认启用).
+
+*(For detailed third-party open-source licenses, including test-only Kotlin Test/JUnit, [Robolectric](https://github.com/robolectric/robolectric) (launcher data-safety regressions), and OkHttp MockWebServer dependencies that are not packaged into the APK, please see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md))*
+
+---
+
+## Core Security Notes
+
+For the safety of your device and accounts, please pay strict attention to the following when using and compiling this app:
+
+1. **ADB & `Debuggable` Risks:**
+   The current default release build configuration **keeps `debuggable=true`** (to facilitate log capture in case of crashes). This means any computer or malicious software connected to your phone with `ADB` permissions can extract data from this app (including encrypted Steam credentials). **NEVER grant ADB debugging permissions to untrusted computers or third-party app stores.**
+2. **Steam Account Security:**
+   - This app will **NEVER** upload your Steam account password to any third-party server. The password and the Steam Guard code entered for the current login remain in memory only; they are not written to disk, an Android service intent, or logs.
+   - After Steam accepts the initial credential request, the launcher temporarily stores only an encrypted, short-lived authentication transaction handle so an interrupted login can resume. The handle expires automatically and contains Steam routing/status data, not the password or one-time Guard code.
+   - The `Refresh Token` is encrypted and stored locally via Android's `EncryptedSharedPreferences`.
+   - For Steam mobile confirmation, polling starts immediately. You can switch to the Steam app, approve the request, and return normally; keeping this launcher in a floating window or split screen is not required. A foreground authentication service keeps the transaction alive and reconnects to Steam CM when possible, while cancel or expiry removes the pending transaction.
+   - **Strongly Recommended:** Only log into Steam using an APK compiled by yourself from trusted source code or obtained from a highly trusted channel.
+3. **Malicious MOD Risks:**
+   Mods for *Slay the Spire 2* are essentially arbitrarily executed C# code. **Malicious Mods can bypass the sandbox to directly read local files on your phone (including configurations containing your Steam Token).** Before attempting to install unknown Mods from untrusted sources, **make sure to log out of Steam in the app settings** to prevent account theft.
+
+---
+
+## How to Build (APK Packaging)
+
+> **Note:** For complete environment configuration and parameter details, please refer to [`doc/build/building-and-packaging.md`](doc/build/building-and-packaging.md).
+
+### 1. Prerequisites
+- **OS:** Linux / macOS / WSL (Windows)
+- **Toolchain:** 
+  - JDK 17+
+  - Android SDK (API 35) & NDK
+  - .NET SDK (for compiling C# compat plugins)
+  - Python 3
+
+### 2. Get the Source Code
+Because it includes the compatibility pack submodule, please clone with the `--recursive` flag:
+```bash
+git clone --recursive https://github.com/ModinMobileSTS/Sts2MobileLauncher.git
+cd Sts2MobileLauncher
+```
+
+### 3. Local Environment Setup
+Copy the environment variable templates and modify the `.env` and `local.properties` files according to your actual local paths:
+```bash
+cp .env.example .env
+cp local.properties.example local.properties
+```
+> **Note:** The `.env` file must configure `JAVA_HOME`, `ANDROID_HOME`, `DOTNET_BIN`, and the original PC DLL reference paths used for compiling the compatibility pack (`STS2_ORIGINAL_*_REFERENCE_DIR`).
+
+### 4. Sync Runtimes and Dependencies
+Run the following script to extract large runtime artifacts (Godot templates, FMOD, etc.) to their designated locations (these files are git-ignored and must be generated locally):
+```bash
+tools/android/sync-runtime-from-references.sh
+```
+The Android FMOD engine and Godot bridge must match the PC game's 2.03.06 release. Place the matched arm64 native libraries beside the AAR in `arm64/`, or set `STS2_FMOD_ANDROID_LIBS_DIR` in `.env`. Sync rejects older or mixed binaries instead of repackaging the old reference runtime. See [`doc/build/building-and-packaging.md`](doc/build/building-and-packaging.md).
+
+### 5. Compile Compatibility Packs (Compat Packs)
+Compile and stage all bundled compatibility artifacts into APK assets:
+```bash
+tools/android/stage-bundled-compat-artifacts.sh
+```
+This stages the flattened schema-2 full compatibility family pack from `port-mod/` and the generic `offline-bootstrap/` fallback pack. The current `v0.111.0` public-beta build has an independent target because it moves version, ModelDb-hash, and MOD validation into a transport-level handshake and requires version information when constructing host/client services. The older `v0.110.x` line keeps its stable shared target id for v0.110.0/v0.110.1, whose compat-facing API is equivalent; v0.109.0/v0.109.1 similarly share the stable `v0.109.0` id. A target may declare `sts2_dll_sha256` as either a legacy string or a list of API-compatible hashes. The offline bootstrap is only auto-matched when an imported game payload has no installed exact SHA/version compatibility pack. Its wildcard is a best-effort fallback rather than a compatibility guarantee: probe contract v2 resolves only understood runtime API shapes, marks success after real ModelDb initialization, and prevents a known-failed pack/version/payload-SHA tuple from being auto-selected again. Run `offline-bootstrap/tools/test-offline-contract.sh` to validate synthetic API changes and every locally configured original reference.
+
+If the current launch profile has no usable compatibility pack, launching now opens a recommendation bottom sheet instead of only showing an error. It first recommends the best matching bundled or installed full target; only when no full target matches does it offer the generic offline fallback. The profile is changed only after the user chooses **Use recommendation and continue**, and the sheet can instead open compatibility pack management directly.
+
+If you only need to rebuild the full `port-mod` family pack, use:
+```bash
+tools/android/stage-bundled-compat-packs.sh
+```
+Legacy per-version branch packs remain available for diagnostics:
+```bash
+COMPAT_PACK_BUILD_MODE=legacy tools/android/stage-bundled-compat-packs.sh
+```
+
+When bringing up a new game version, run the source-level port compatibility audit before editing targets or patches:
+```bash
+tools/port_mod_ast_audit.py \
+  --old-source ../s2_original/s201101 \
+  --new-source ../s2_original/s201110 \
+  --port-mod port-mod/STS2AndroidPortCompat \
+  --out .agent/reports/v111-port-mod-ast-audit
+```
+See [`doc/build/building-and-packaging.md`](doc/build/building-and-packaging.md) for report details and status meanings.
+
+### 6. Build the Importer APK
+Run the build script. This will output an "Importer APK" that **DOES NOT** contain the base game (the recommended, legally compliant distribution method):
+```bash
+tools/package/build_importer_apk.sh
+```
+Upon successful build, the APK will be output to `dist/sts2-re-importer.apk`.
+
+Android display refresh rate is selectable in Extra Settings → System below
+Preload: **High refresh (default)** requests the highest compatible rate,
+**Request 60Hz** requests an exposed same-size 60Hz mode (including 59.94Hz), and
+**Follow system** clears the app's Window preference and Surface frame-rate vote.
+If Android exposes no compatible 60Hz target, the app clears its previous request
+and leaves the display to the system; it does not substitute 50/90/120Hz or claim
+that the display is locked. These choices do not change the game's FPS cap or VSync.
+
+Requests require a resumed, focused Activity and a valid render `Surface`, and
+are cancelled on pause, focus loss, or Surface destruction. Android 12+ uses
+`Surface.setFrameRate(..., CHANGE_FRAME_RATE_ALWAYS)` with an exact Window mode
+when available, or a refresh-rate-only preference with the mode ID cleared.
+Unchanged requests do not re-vote on the same Surface; mode changes update or
+clear the vote. Delayed verification checks the actual mode and Hz, without
+`SurfaceControl`. The profile setting is `android_display_refresh_rate_mode`
+(`high` / `60hz` / `system`); old high-refresh booleans migrate to `high` or
+`system`. A disabled-by-default performance overlay is also available here.
+
+Combat VFX reuse remains an explicit, room-local whitelist: damage numbers,
+hit sparks, shivs, big slashes, and fire bursts, with idle limits of
+16/8/8/2/2. Additional simultaneous effects are still fully created. Unknown
+child scripts or foreign factory/lifecycle/tint patches keep the original
+allocation path. This does not change effect counts, gameplay, preload scope,
+or GC settings, and it does not remove first-use resource/shader work.
+
+The fullscreen render-resolution preset is applied by the full compatibility
+pack at game startup and can also be switched immediately from the in-game
+Android settings page. The root Window keeps Godot `CanvasItems` scaling while
+only its renderer-side target changes, so cards, controls, touch coordinates,
+and other content retain the same relative layout. The effective target follows
+the current CanvasItems aspect (for example, a 1280×720 preset becomes 1600×720
+on a 2400×1080 attachment). Android Surface size and the high-refresh request are
+left untouched; aspect-ratio, UI-scale, global-scale, and font-scale settings
+continue to apply independently.
+
+Extra Settings → Graphics → Graphics parameters → Rotation mode also offers
+**Portrait (requires portrait UI MOD)**. It is opt-in; the default remains
+**Follow system**, limited to landscape. Install and enable a compatible portrait
+UI MOD separately before using it; the launcher does not supply a portrait UI.
+With the updated full compat pack, portrait mode uses a 1080-wide logical canvas
+whose height follows the physical portrait aspect. Stored landscape aspect and
+UI-scale choices are retained but do not override this canvas; game scale and
+font scale remain independent. Selecting a landscape mode restores the stored
+aspect/UI-scale behavior. Render resolution remains a separate renderer setting.
+
+
+### 7. ADB Automation Debugging
+For connected-device debugging, the repository includes an ADB harness that can install the APK, push a payload/compat pack/MOD into app-private storage, run launch preparation, start the game, and collect logs or Perfetto traces:
+```bash
+tools/debug/sts2-adb-debug.sh build-install
+tools/debug/sts2-adb-debug.sh status --pull
+tools/debug/sts2-adb-debug.sh launch --mode perf --preload aggressive --logcat-duration 45 --perfetto 45 --pull
+```
+See [`doc/build/adb-automation-debugging.md`](doc/build/adb-automation-debugging.md) for targeted MOD/compat/preload scenarios.
+
+### 8. Windows Launcher
+`windows/` contains a Windows launcher (Electron) with the same "Meow Zero & Little Fish's Cottage" front end as the Android and iPad launchers. On Windows the original PC game runs natively, so the launcher only finds the game (Steam libraries or manual folders), manages mods through `settings.save`, takes save snapshots and launches the game. It only needs Node.js 22:
+```bash
+tools/package/build_windows_launcher.sh
+```
+See [`windows/README.md`](windows/README.md).
+
+---
+
+## More Documentation
+
+If you want to contribute to development, understand how the compatibility packs work, or dive deeper into the architecture, please check the `doc/` directory:
+
+- [Project Structure & Version Model](doc/architecture/project-structure.md)
+- [Detailed Guide to Building & Packaging](doc/build/building-and-packaging.md)
+- [ADB Automation Debugging](doc/build/adb-automation-debugging.md)
+- [Runtime Loading & Compat Pack Lifecycle](doc/runtime/compat-pack-loading-flow.md)
+- [Notes on Developing MOD Compatibility Patches](doc/modding/mod-and-compat-notes.md)

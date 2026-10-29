@@ -1,0 +1,60 @@
+{
+  "name": "sts2-cottage-launcher",
+  "productName": "STS2 Cottage Launcher",
+  "version": "0.1.0",
+  "description": "Slay the Spire 2 Windows 启动器：喵喵零和小鱼的小屋（与 Android / iPad 启动器同一套前端）",
+  "license": "MIT",
+  "private": true,
+  "main": "src/main/main.js",
+  "scripts": {
+    "prepare-assets": "node scripts/prepare-assets.js",
+    "start": "npm run prepare-assets && electron .",
+    "test": "node --test test/*.test.js",
+    "dist": "npm run prepare-assets && electron-builder --win --x64",
+    "dist:zip": "npm run prepare-assets && electron-builder --win zip --x64"
+  },
+  "dependencies": {
+    "yauzl": "3.4.0",
+    "yazl": "3.3.1"
+  },
+  "devDependencies": {
+    "electron": "44.6.0",
+    "electron-builder": "26.17.0"
+  },
+  "build": {
+    "appId": "com.megacrit.sts2re.windows",
+    "productName": "STS2 Cottage Launcher",
+    "artifactName": "sts2-cottage-launcher-${version}-win-${arch}.${ext}",
+    "directories": {
+      "output": "../dist/windows"
+    },
+    "files": [
+      "src/**/*",
+      "assets/generated/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/generated/icon.png",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "STS2 小屋启动器"
+    }
+  }
+}

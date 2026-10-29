@@ -1,0 +1,70 @@
+# Build outputs
+build/
+!doc/build/
+!doc/build/**
+
+# Local coding agent state/docs, private changelog, and historical backups
+.agent/
+.omp/
+.pi/
+
+# Agent-only changelog and retired historical docs are kept under .agent/
+doc/changelog/
+docs/
+dist/
+out/
+*.apk
+*.aab
+*.apks
+*.idsig
+
+# Local reproducible-build configuration
+.env
+local.properties
+
+# Local/private inputs and generated payloads/compat packs
+local-inputs/
+*.zip
+android/assets/compat_packs/*.zip
+*.7z
+*.rar
+*.keystore
+*.jks
+*.p12
+
+# Android/Gradle caches
+.gradle/
+**/.gradle/
+android/.gradle/
+android/**/build/
+android/local.properties
+android/**/local.properties
+.cxx/
+.externalNativeBuild/
+
+# Generated/runtime game payloads
+runtime/generated/
+runtime/payload/
+**/payload_import/
+**/.payload_manifest.json
+
+# IDE/OS noise
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Pi local package install cache
+.pi/npm/node_modules/
+
+# Heavy runtime artifacts harvested from Godot/reference launchers; generated/copied locally.
+android/assets/dotnet_bcl/
+android/libs/
+android/assets/payload/
+
+# .NET build outputs
+**/bin/
+**/obj/
+
+# Python bytecode caches
+__pycache__/

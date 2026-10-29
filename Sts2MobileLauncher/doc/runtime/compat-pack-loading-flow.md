@@ -1,0 +1,390 @@
+# MOD 与兼容包加载流程
+
+本文记录 Android 兼容包、`STS2Mobile.dll`、`port_compat.pck`、原版 payload 和普通用户 MOD 的详细加载顺序。当前说明适用于内置的 `v0.103.x` / `v0.107.1` / `v0.108.0` 正式/稳定兼容 target、共享 `v0.109.x`（v0.109.0/v0.109.1，稳定 target id 为 `v0.109.0`）与共享 `v0.110.x`（v0.110.0/v0.110.1，稳定 target id 为 `v0.110.0`）target、独立 `v0.111.0` public-beta target，以及旧 `v0.106.1` / `v0.107.0` beta target。
+
+## 1. 术语
+
+- **payload**：用户导入的 PC 版游戏 zip 解压结果，安装到 `<files>/payloads/<payload_id>/game/`；切换版本不再复制到固定 active 目录。
+- **compat pack**：Android 移动端兼容包，安装到 `<files>/compat-packs/<pack_id>/`。当前兼容两种 manifest：
+  - schema 1 legacy 单目标包：根目录包含 `compat_manifest.json`、`STS2Mobile.dll`、`port_compat.pck`、`SHA256SUMS`。
+  - schema 2 family 包，根目录包含 `compat_manifest.json`、`SHA256SUMS`，并在 `variants/<target_id>/` 下为每个目标版本放置 `STS2Mobile.dll` 与 `port_compat.pck`。
+- **offline bootstrap**：`offline-bootstrap/` 构建的通用离线启动层，pack id 为 `sts2-android-offline-bootstrap`。它也是 schema 2 包，但 manifest 必须声明 `pack_kind=offline-bootstrap`、target `match_mode=offline-wildcard`、`versions=["*"]`；启动器只在没有 full compat 包按 SHA/version 命中当前 payload 时自动推荐它。它不静态引用 `sts2.dll`，只做 GodotSharp bootstrap、Android temp、反射式平台/存档保底补丁、原版 `ModelDb` two-phase 初始化保护和 runtime probe。wildcard 只表示未知 payload 可以尝试保底，不代表已认证支持任意未来版本；probe v2 会把实际运行结果绑定到离线包版本、target、安装 source zip SHA、payload version 与精确 DLL SHA。
+- **compat fallback**：APK assets 中的 `android/assets/dotnet_bcl/STS2Mobile.dll` 与 `android/assets/port_compat.pck`，主要用于兼容旧启动路径或无已选包的兜底；正常 launcher 启动会先检查当前启动配置的 compat pack，缺包时不静默 fallback。
+- **launch profile / 启动配置**：安装在 `<files>/instances/<profile_id>/instance.json`，绑定一个 payload、一个可选 compat pack，并决定存档/设置与 MOD 使用全局目录还是 profile 独立目录。schema 2 family 包会同时记录 `compat_pack_id` 与 `compat_target_id`；兼容包选择属于启动配置，不再有运行时全局选中包 fallback。
+- **普通用户 MOD**：默认放在全局 `<files>/mods/`；当当前 launch profile 的 `mods_mode=isolated` 时放在 `<files>/instances/<profile_id>/mods/`。由游戏原版 `ModManager` 在被兼容层 patch 后扫描加载。
+
+Compat pack 不是普通用户 MOD。它必须早于原版 `ModManager.Initialize()` 加载，否则无法 patch Steam/Sentry/platform、路径、MOD 扫描、输入、shader 等 Android 必需行为。
+
+## 2. 构建期流程
+
+```text
+legacy mode:
+  port-mod branch
+    -> dotnet build STS2Mobile.csproj
+    -> STS2Mobile.dll
+    -> make-port-overlay-pck.py
+    -> port_compat.pck
+    -> compat_manifest.json
+    -> zip: sts2-android-compat-*.zip
+
+flat matrix mode:
+  port-mod/targets/active/*/target.json
+    -> dotnet build STS2Mobile.csproj per target ReferenceFlavor
+    -> variants/<target_id>/STS2Mobile.dll
+    -> variants/<target_id>/port_compat.pck
+    -> schema 2 compat_manifest.json targets[]
+    -> zip: sts2-android-compat.zip
+
+offline bootstrap:
+  offline-bootstrap/src/STS2OfflineBootstrap
+    -> dotnet build without sts2.dll reference
+    -> variants/offline-any/STS2Mobile.dll
+    -> minimal variants/offline-any/port_compat.pck
+    -> schema 2 compat_manifest.json pack_kind=offline-bootstrap
+    -> zip: sts2-android-offline-bootstrap.zip
+```
+
+相关脚本：
+
+- `tools/android/build-port-mod.sh`
+  - 构建当前 submodule checkout。
+  - 输出 fallback：`android/assets/dotnet_bcl/STS2Mobile.dll`、`android/assets/port_compat.pck`。
+- `port-mod/tools/build-compat-pack.sh`
+  - 构建当前 checkout 的 schema 1 独立 zip，主要用于 legacy 包对照或诊断。
+  - 写入 build metadata：branch、commit、dirty、timestamp。
+- `tools/android/stage-bundled-compat-packs.sh`
+  - 默认 matrix mode：调用 `port-mod/tools/build-compat-matrix.sh`，从同一 checkout 的 `targets/active/*/target.json` 生成 schema 2 family zip。
+  - `COMPAT_PACK_BUILD_MODE=legacy`：按 `tools/android/bundled-compat-packs.json` 构建多个 schema 1 分支包，非当前分支使用临时 git worktree；仅用于回退诊断。
+  - 输出到 gitignored 的 `android/assets/compat_packs/*.zip`，随本地 APK 打包但不由 git 跟踪。
+- `offline-bootstrap/tools/test-offline-contract.sh`
+  - 用合成 API 形状检查安全接受/拒绝规则，并对本机已配置的所有 original `sts2.dll` 做只读反射契约验证；不把任何游戏程序集作为静态编译引用。
+- `offline-bootstrap/tools/build-offline-pack.sh`
+  - 构建通用离线启动层，不读取 `port-mod/targets` 来生成版本 variant，不接受 `ReferenceFlavor`，不静态引用 `sts2.dll`；构建前运行上述契约测试。
+  - 输出 `sts2-android-offline-bootstrap.zip`，当前 `compat_version=0.2.0-dev`、`probe_contract=offline-bootstrap-v2`。
+- `tools/android/stage-bundled-compat-artifacts.sh`
+  - APK 打包使用的统一 staging 入口：一次清理 assets 后依次 stage full compat family 包和 offline bootstrap 包。
+
+## 3. 安装 / 首次进入设置页
+
+1. Android 默认启动 `GameSettingsActivity`。设置页内部使用“画面 / 操作 / 存档 / 系统”顶部 Segmented Button 分区，较长的单选设置（如渲染器、分辨率、旋转模式、日志等级、桌面图标启动后）通过 Bottom Sheet 单选列表修改；预加载详细 BottomSheet 刚打开时可通过内容区上滑完整展开，完整展开后内容滚动区不参与降下/关闭，只能下拉顶部手柄关闭。首次安装和新建隔离档案首次生成设置时，推荐图形默认写入 `msaa=0`、`vsync=off`。画面高级里的“旋转模式”写入 `android_screen_rotation_mode`，默认 `user_landscape`（跟随系统旋转锁定设置，仅在两向横屏间受系统开关约束旋转）；也可选 `auto`（强制自动旋转，即使系统关闭旋转锁定，游戏内也支持双向重力感应旋转）；此外还可固定为 `landscape`（不旋转）或 `reverse_landscape`（翻转 180°）。桌面图标名称/图标使用主应用资源；“设置 → 系统 → 桌面图标启动后”默认打开附加设置，也可切换为向导完成后自动走 `GameSettingsActivity.launchGame()` 直接启动游戏。设置页快捷方式和游戏内返回设置不触发自动直启。
+
+   同一“旋转模式”列表还提供 `portrait`（“竖屏，需配合竖屏 MOD”），默认不启用；请自行安装并启用兼容的竖屏 UI MOD。Java 使用 `SCREEN_ORIENTATION_PORTRAIT`，并停止横屏重力强转；更新后的 full compat 同步 Godot portrait 方向与下述竖屏逻辑画布。启动器不内置、检测或自动启用竖屏 MOD；offline bootstrap 不包含显示布局补丁。
+2. 设置页可在后台调用 `CompatPackManager.installBundledCompatPacks()`：
+   - 枚举 APK assets `compat_packs/*.zip`。
+   - 复制到私有临时目录。
+   - 安全解压、寻找 `compat_manifest.json`。
+   - schema 1 校验根目录 `STS2Mobile.dll` 与 `port_compat.pck` 存在；schema 2 校验 `targets[]` 中每个 artifact 指向的 variant dll/pck 存在。
+   - 普通 full compat 包不允许在版本或 `sts2_dll_sha256` 中使用 `*`。`sts2_dll_sha256` 可为 legacy 单字符串，也可为同一 API-compatible variant 的 SHA 数组；精确匹配会遍历全部元素。只有 schema 2 且 `pack_kind=offline-bootstrap`、`match_mode=offline-wildcard` 的 target 可以声明完整版本字符串 `*`；`target_id` 和每个 `sts2_dll_sha256` 仍不允许通配符。
+   - 安装到 `<files>/compat-packs/<pack_id>/`。
+   - 不会自动把新安装的包设为全局选中包；用户需要在创建或编辑启动配置时选择。
+   - 从旧 schema 1 bundled 包升级到 flat matrix 包时，会把启动配置中旧 `sts2-android-compat-v0.*` bundled pack id 自动迁移到 `sts2-android-compat` family 包和对应 `compat_target_id`。例如 `sts2-android-compat-v0.107.0-beta` 会迁移为 `compat_pack_id=sts2-android-compat`、`compat_target_id=v0.107.0-beta`；用户手动导入/选择的非 bundled 包不会被覆盖。
+3. 用户也可在“版本”页通过 SAF 导入外部 compat pack zip；导入后同样只进入已安装包列表。
+
+## 4. Payload 导入与版本匹配
+
+1. 用户在设置页选择 `SlayTheSpire2.zip`，直装版从 APK assets `payload/SlayTheSpire2.zip` 解压，或在 Steam 中心使用自己拥有 STS2 的 Steam 账号通过 SteamPipe 下载。
+2. zip 路径由 `PayloadManager` 复制 zip 到私有临时文件并计算 sha256；Steam 路径先解析并筛选 depot manifest，再把 prepared manifest 直接交给 `SteamDepotDirectoryDownloader`，避免正式下载阶段重复拉取 manifest。下载目录是按 branch、已选 app/depot/manifest 与下载布局版本生成的稳定 `<files>/steam/downloads/payload-<fingerprint>/`，随后调用 `PayloadManager.importPayloadDirectory(...)`。
+   - chunk worker 可在 Steam 中心选择 1 / 2 / 4，默认 2。worker 只负责并发请求与解密/解压，结果通过有界通道交给单 writer 按 offset 落盘；在途内存预算按 JVM 最大堆自适应，并限制在 16–64 MiB。
+   - 未完成文件写为 `*.steam.part`。同一 fingerprint 重试时，目录下载器会按 manifest chunk checksum 校验已有区间并只补缺失 chunk；完整正式文件也会经过长度和 manifest SHA-1 严格检查后复用。全部文件校验通过后才把 part 原子改为正式文件名并进入 payload 导入。下载至安装完成全程持有 `<files>/steam/downloads/locks/payload-download.lock` 全局文件锁，防止 Activity 重建或不同 branch 并行任务同时修改 staging/payload store。旧 `staging-*` / `failed-*` 会清理，其他 fingerprint 任务保留 7 天后清理。
+   - Steam 目录若返回 `use_as_proxy`，CDN 传输按 proxy route → origin route 回退并遵守 bypass 类型；depot auth token 仅用于 Steam 返回的 CDN origin/proxy，不会转发到 Steam Community/API/图片的 rmbgame 兼容访问。取消任务会取消 coroutine，并继续向下取消当前 OkHttp Call。
+3. staging 目录统一校验；若用户 zip 顶层只有一个目录且必需文件都在该目录内，导入器会先把该顶层目录展平：
+   - `SlayTheSpire2.pck`
+   - `release_info.json`
+   - `data_sts2_windows_x86_64/sts2.dll`
+   - `sts2.deps.json`
+   - `sts2.runtimeconfig.json`
+4. `PckPatcher` 只修改私有 PCK copy，禁用旧版 GDScript `SentryInit`、v0.110.0 起的 C# `SentryBootstrap` autoload 和 Sentry gdextension 元数据，避免 compat Apply 前启动桌面 Sentry。patch record schema 2 明确表示两种 autoload 都已检查；旧 APK 留下的 schema 1 记录会在升级后第一次 launch preparation 自动重扫并刷新 PCK SHA，保证 v0.110.0 及后续 payload 都能补上新 bootstrap patch。
+5. 写入 staging 中的 `.payload_manifest.json`，包含 `release_info`、`version`、`commit`、`sts2_dll_sha256`、PCK patch 结果等。
+6. 按 manifest 身份生成 `payload_id`，原子安装到 `<files>/payloads/<payload_id>/game/`；同一 payload 已存在时只替换 payload store 中的该目录，不再复制到 `<files>/game/`。
+7. 导入/Steam 下载完成后创建或选择一个 launch profile，profile 会绑定该 payload；新建 profile 时会按 payload manifest 中的 `sts2_dll_sha256` 与 `version` 填入推荐 compat pack。匹配评分顺序为：命中 target 单 SHA 或 SHA 数组任一元素、target 主版本、manifest 显式支持版本、offline bootstrap wildcard。schema 2 family 包在同等精确命中时优先；offline bootstrap 只有在没有任何 full compat 包命中当前 payload 时才会自动填入。若 probe v2 已记录相同 `pack_id + target_id + compat_version + source zip SHA + payload version + sts2.dll SHA` 的终态失败，wildcard 不再为新配置自动匹配该离线包；用户仍可手工选择并从风险对话框重试。schema 2 family 包会写入 `compat_pack_id` 和 `compat_target_id`；已有 profile 不会在每次导入/启动时被覆盖，只有旧 bundled schema 1 pack id 到 flat family pack 的升级迁移会自动改写。Steam 来源会在 `.payload_manifest.json` 的 `source.kind=steam_depot`、`source.steam.depots[]` 与 `source.steam.concurrent_chunks` 中记录。v0.109.0/v0.109.1 的 DLL SHA 都由稳定 id `v0.109.0` 的共享 variant 精确匹配；v0.110.0/v0.110.1 按各自 DLL SHA 精确匹配共享 `compat_target_id=v0.110.0`；v0.111.0 的 SHA `0861bfa1...` 精确匹配独立 `compat_target_id=v0.111.0`。
+8. 旧安装中的 `<files>/game/` 与 `<files>/game-versions/<id>/game/` 会在启动器 bootstrap 时尽量通过 rename 迁移到 payload store，避免大文件复制。
+
+## 5. 启动前检查
+
+`GameSettingsActivity.launchGame()`：
+
+1. 检查当前 launch profile 绑定的 payload 是否 ready；配置存在但本体缺失/被删除时不 fallback 到旧 `<files>/game/`，而是提示重新导入/下载、切换配置或编辑配置；没有 payload 时提示导入，直装版可先解压内置 payload。
+2. 如果 Android 兼容包开关启用：
+   - 只读取当前 launch profile 的 `compat_pack_id` / `compat_target_id` 并解析已安装包；schema 2 family 必须有真实存在的 target，target id 为空或已移除时不得静默回落到 family 第一个 variant。
+   - 若配置未选择兼容包、引用的包已删除或 target 缺失，启动请求会先等待本次 APK 内置兼容包安装 bootstrap 完成，再弹出 MD3 Bottom Sheet。推荐分两层计算：先仅在内置/已安装 full 包中沿用 DLL SHA、主版本、显式支持版本与 schema/priority 评分选最佳 target；只有没有任何 full 命中时，才从未记录当前 tuple 终态失败的 offline wildcard 中选择通用离线包。
+   - Bottom Sheet 展示当前 payload 版本/短 DLL SHA、推荐来源（内置、已安装或通用离线兜底）与具体 target。用户点“使用推荐并继续”后才把 `compat_pack_id + compat_target_id` 写回当前 profile 并重新进入完整启动校验；点“打开兼容包管理”会直接进入“版本 → 兼容包”。没有可安全自动推荐项时只提供管理入口，启动器不会静默覆盖 profile。
+   - manifest/target 仍存在但 `STS2Mobile.dll` 或 `port_compat.pck` 缺失，同样属于缺失依赖，走上述推荐入口，不提供“版本不匹配仍继续”绕过。
+   - 若选中包 manifest 支持版本列表与 payload version 不一致，弹出风险对话框，用户可取消、去启动配置页或强制启动。
+   - 若选中包是 offline bootstrap wildcard，首次启动当前 `pack_id + target_id + compat_version + source zip SHA + payload version + sts2.dll SHA` 组合时弹出风险确认；确认后只记住该组合。offline bootstrap 运行时原子写 `<files>/launcher/offline-bootstrap-probe.json`：`starting -> patches_installed -> modeldb_initializing -> ready` 表示完整成功；`unsupported_api`、`apply_failed`、`runtime_failed` 是终态失败。版本页选择器会区分“未验证 / 已验证 / 探测失败”；相同 tuple 曾失败时每次启动都显示失败详情并只允许显式重试，不把旧确认当成成功认证。ADB 自动化 `status` 也会把原始 JSON 放入 `offline_bootstrap_probe`。
+3. 启动前 launcher 会为当前 launch profile account root 创建一份本地 `before-launch` 存档快照（默认只保留最近 5 个）。若 Steam Cloud 模式配置为“启动前拉取”或“完整自动”，且已保存 Steam refresh token，则随后拉取当前 account root 的 Steam Cloud 文件；若 WebDAV 模式配置为“启动前拉取”或“完整自动”，且已配置 WebDAV URL，则继续拉取同一 account root 的 WebDAV 文件。任一同步失败时会弹窗允许取消、打开对应云存档中心或跳过同步继续启动。
+4. 启动后台线程执行 `GameLaunchPreparationManager.prepareForLaunch()`。
+5. 准备完成后启动 `GodotApp` 并附加 `launch_prepared=true`。
+
+准备复制兼容程序集/overlay 前再次校验已绑定包的两个 artifact；Godot Activity 也不信任单独的 `launch_prepared=true` 标记。缺文件或准备失败会终止启动，不静默进入半兼容状态；用户显式关闭兼容包时仍清理 staged DLL/overlay 并保留无兼容层启动路径。
+
+Steam Cloud 与 WebDAV 的非强制同步使用逐文件的共同基线：仅本地变化时拉取会保留本地文件，仅远端变化时可以拉取，两端分叉或没有共同基线而内容不同时要求用户明确选择。强制拉取/上传仍可按用户选择覆盖。空操作和部分同步都只为 SHA-1 与长度确认一致的文件推进基线；未同步、缺失或分叉文件保留最后共同基线。旧版曾记录的 `local_sha1 != remote_sha1` 条目不再被当作共同祖先，升级后可能需要先确认一次保留哪端，不能静默推断胜方。
+
+本地快照先写 `.part`，关闭 ZIP 并校验 schema 1 元数据、文件数量和路径清单后才重命名发布。恢复列表忽略缺少 ZIP 中央目录或元数据/清单不完整的存档；恢复时还逐文件校验长度和 CRC，全部通过后才创建 `before-restore` 备份并替换账号目录。恢复 staging 与 `.snapshot-rollback-*` 位于当前 profile 的快照目录，不参与账号目录发现；先把原账号目录移入 rollback，再移入完整 staging，第二次 rename 失败则回滚原目录。若回滚本身也失败，保留 rollback 并在异常中记录位置，不删除原存档。只有恢复成功后才执行快照保留数量裁剪；该过程不承诺两次 rename 之间的断电/强杀原子性，可通过保留的目录或安全快照恢复。
+
+## 6. Launch preparation
+
+原生目录环境先由 `Sts2Application.onCreate()` 调用 `AndroidRuntimeEnvironment.configure()` 初始化，早于 Godot/Mono。它将 `HOME=<files>` 并创建/写探测 `<files>/.config/`，让当前 Mono 的 `ApplicationData` 使用私有目录；`TMPDIR` / `TMP` / `TEMP` 与 Java `java.io.tmpdir` 仍为 `<files>/tmp/`。HOME/temp 成功状态独立，同一进程串行、幂等配置，失败部分允许后续入口重试；不在 Mono 缓存已建立后按 profile 改写 HOME。
+
+`GameLaunchPreparationManager.prepareForLaunch()` 顺序：
+
+1. 补齐 Android 私有 HOME/temp 环境，避免普通 MOD 使用 `/data/.config`、Harmony/MonoMod 使用不可写 `/tmp`。
+2. 规范化 Android locale 到游戏支持的语言 key，避免厂商 locale 字符串污染 `settings.save`。
+3. 刷新内置 compat packs（如果开关启用）。
+4. 输出当前 selected compat pack 的诊断日志：pack id、target、source zip sha、build branch/commit/dirty、notes。
+5. 对旧安装的 payload 补做 PCK patch 记录。
+6. payload PCK stamp 变化时清理 Godot texture import cache。
+7. Stage overlay：
+   - 兼容包开关关闭：删除 `<files>/port_compat.pck`；启动前会先弹风险确认，用户选择继续才进入无兼容层准备流程。
+   - 有 selected pack：schema 1 复制 `<files>/compat-packs/<pack_id>/port_compat.pck`；schema 2 复制 `<files>/compat-packs/<pack_id>/variants/<target_id>/port_compat.pck` 到 `<files>/port_compat.pck`。
+   - 无 selected pack：仅在兼容包开关开启但没有 profile 级兼容包选择的 fallback 准备路径中使用 APK assets `port_compat.pck` fallback；如果 profile 明确选择的 pack/target 缺失，会删除 staged overlay 并拒绝 asset fallback。
+8. 准备 Mono publish 目录 `<files>/.godot/mono/publish/arm64/`：
+   - 复制 APK assets `dotnet_bcl/*`，但 `STS2Mobile.dll` 由 selected pack 决定。
+   - 兼容包开关关闭：删除 publish 目录中的 `STS2Mobile.dll`；`GodotApp` 的直接启动 fallback 也不会再从 selected pack 或 APK asset 强制补回。
+   - 有 selected pack：复制 selected `STS2Mobile.dll`；schema 2 的来源是当前 target variant。启动器会逐字节比较 selected DLL 与 publish 副本，只有内容完全一致才复用；文件长度相同或 publish mtime 更新都不能代替内容匹配，复制完成后还会再次校验，避免切换同尺寸 target variant 时继续加载旧版本 DLL。
+   - 无 selected pack：仅在兼容包开关开启但没有 profile 级兼容包选择的 fallback 准备路径中尝试复制 fallback `dotnet_bcl/STS2Mobile.dll`；如果 profile 明确选择的 pack/target 缺失，会删除 staged DLL 并拒绝 asset fallback。
+   - 复制当前 profile payload 目录中 `data_*/*` 的游戏 assemblies，跳过 `.so`，并保护 BCL/System/GodotSharp 等 runtime DLL。
+   - 使用 SharedPreferences stamp 避免不必要的大文件重复复制；compat stamp 包含已安装来源 zip SHA-256，用于识别 compat 包内容更新。payload/profile 变化时强制刷新游戏 assemblies，并清理 publish 目录里旧 payload 遗留的游戏 DLL/JSON。
+
+`GodotApp` 仍保留 fallback：如果不是从设置页 prepared 启动，会自己调用同一准备流程；该 fallback 同样尊重兼容包开关，关闭时不会补回 `STS2Mobile.dll`。游戏通过 Android 兼容层的退出回设置路径触发 `GodotApp.restartToSettingsFromGame()` 时，会写入 `<files>/launcher/expected_clean_game_exit.json`；下次设置页启动时会创建一份本地 `clean-exit` 存档快照，如 Steam Cloud 或 WebDAV 模式为完整自动，还会尝试上传当前 launch profile account root 的本地变化。
+
+设置页因方向或其他配置变化重建时，旧实例的进度弹窗在 Activity 销毁时调用 `Dialog.dismiss()` 关闭，即使 DecorView 已不再报告为 attached 也不能跳过关闭，否则可能留下 `WindowLeaked`；已开始的 `clean-exit` 快照和云上传继续完成。旧实例不会再弹出完成/失败提示，新实例也不会重复消费同一退出标记。
+
+## 7. Godot 启动与 runtime 入口
+
+`GodotApp.getCommandLine()`：
+
+- 添加 renderer/display 参数。
+- 不再根据 `fullscreen_render_size` 追加 Godot `--resolution`；该字段由 compat 在游戏运行中动态应用到根 renderer viewport。
+- Android 显示刷新率由当前 profile 的 `android_display_refresh_rate_mode` 控制：`high` 默认请求最高兼容刷新率；`60hz` 请求同尺寸 60Hz（容许 59.94Hz）；`system` 清空 Window 偏好并撤销 Surface vote。没有暴露兼容 60Hz 目标时同样撤销旧请求并交回系统，不替代为 50/90/120Hz，也不承诺锁定显示或修改游戏 FPS/VSync。旧 `android_high_refresh_rate_enabled` true/false 迁移为 high/system，新字段优先，迁移后移除旧字段；新字符串同步到 SharedPreferences，并由 `AndroidSettingsMerge` 保留，避免原版保存 settings 时丢失。APK 保持 Android game category。`HighRefreshRateController` 以 generation 合并生命周期请求，只在 resumed、有焦点、render View attached 与 Surface 有效时 apply；唯一 `SurfaceHolder.Callback` 维护 surface epoch，以 100/500/1500ms 有限重试等待 Surface，失焦、pause、destroy、Surface 销毁或模式切换取消旧回调。Android 12+ 使用 `CHANGE_FRAME_RATE_ALWAYS`；同一 Surface 未变的请求不重复 vote，切换模式则更新/撤销。精确 mode 设置 mode ID，alternative-only 清空 ID 并使用刷新率偏好；延迟约 1.2 秒观测实际 mode/Hz，显式 mode 不符不得报告 verified。不使用 `SurfaceControl`，不改 Surface/viewport 尺寸。`GodotApp.onWindowFocusChanged()` 只更新 Java 状态与请求，不手动调用 `GodotLib.focusin/focusout`。
+- 默认配置 `--log-file` 到当前 profile 日志目录 `<files>/instances/<profile_id>/logs/godot.log`，没有 profile 时 fallback 到 `<files>/logs/`；若附加设置 `log_level=off`，则不传 `--log-file`，完全禁用新的 `godot.log` 写入。
+- `Sts2Application` 会在主进程早期启动应用内 logcat 采集器，统一写入全局 `<files>/logs/sts2.log`；启动准备和 `GodotApp` 进入当前 profile 后也继续使用同一个全局文件，不再写入 `<files>/instances/<profile_id>/logs/sts2.log`。每次启动游戏会像 `godot.log` 一样把旧全局 `sts2.log` 归档为 `sts2YYYY-MM-DDTHH.mm.ss.log` 并只把最新采集写入 `sts2.log`；输出采用紧凑 `level tag message` 格式，例如 `I DOTNET [STS2Mobile] ...`，采集过滤遵循附加设置 `log_level`（`off`→停止采集、`info`→I/W/E、`debug`→D/I/W/E、`very_debug`→V/D/I/W/E）。该文件用于补充 `godot.log` 抓不到的 Java/Godot/Mono stderr/native 顶层日志（例如 `[STS2Mobile]`），但普通 app 只能读取自身 UID/进程可见 logcat，完整设备级日志仍需 ADB。
+  采集器复用 16 KiB 输出缓冲，普通日志每 250ms 刷新，E/F 错误日志立即刷新；停止、切换采集 generation 和 16 MiB 轮转前必须关闭并刷新旧 writer，保留当前文件加最多四个归档。正常 logcat 退出先等待管道尾部读完，旧 generation 不能向新会话写入迟到输出。
+- 固定追加 STS2 原生命令行 `--force-steam off`，让原版 `NGame.InitializePlatform()` 即使在 Harmony/MonoMod detour 失效的 ROM 上也走内置 Steam 跳过分支，避免继续尝试加载桌面 `steam_api64`。
+- 根据附加设置中的 `log_level`（默认 `info`，可选 `off` / `debug` / `very_debug`）追加 STS2 原生命令行 `-log <LogType> <LogLevel>`，覆盖 `Generic`、`Network`、`Actions`、`GameSync`、`VisualSync` 的运行日志等级；`off` 时不追加 STS2 `-log` 参数，Debug/Very Debug 会增加日志量并在下次启动生效。
+- 根据附加设置中的 `android_performance_overlay_enabled` 写入或清理 `<files>/launcher/enable_debug_menu.flag`；开启后 compat overlay 加载 `godot-debug-menu` 详细性能面板，默认关闭。
+- `android_volume_up_soft_keyboard` 默认关闭；启用后，`GodotApp` 只有在 Activity resumed、有焦点且 Godot render/input proxy 已初始化时才消费音量上键，并在 `ACTION_UP` 通过 `GodotKeyboardBridge` 调用 Godot 自带 `GodotIO.showKeyboard()`。桥接层从现有 View 树复用透明 `GodotEditText`，保留其文本、光标/选区、输入类型与长度限制；文本提交、中文组合、退格和回车继续由 Godot `GodotTextInputWrapper` 送入原生 input pipeline，而软键盘实际产生的 F1–F12 非文本 `KeyEvent` 由该代理直接交给同一个 `GodotInputHandler`。桥不可用时不消费音量键，也不创建无 Godot `InputConnection` 的替代 `EditText`。应用内快捷面板的软键盘入口复用同一路径。
+- “设置 → 操作 → 鼠标左右键悬浮按钮”（`android_floating_mouse_enabled`，默认关闭）独立于快捷面板，只在游戏 Activity 内显示，不申请系统悬浮窗权限。56dp 圆形按钮可拖动并记忆相对位置，避开系统栏/刘海；闲置 1.5 秒后淡至 20% 不透明度，操作时恢复。样式参考 [SlayTheAmethystModded](https://github.com/ModinMobileSTS/SlayTheAmethystModded)，输入逻辑和图标独立实现。
+  - 按钮依次切换 **左键 → 单次右键 → 锁定右键 → 左键**。单次右键在下一次游戏画面的手指按下/移动/释放结束后恢复左键；在使用前再次点按钮则锁定，不依赖系统双击时间阈值。锁定时高亮背景和锁标记，持续右键，直到再点一次解锁。拖动或取消按钮手势不切换模式。
+  - `FloatingMouseInputController` 仅拦截 Godot render View 上新开始的手指右键手势，使用 `SOURCE_MOUSE` / `BUTTON_SECONDARY` 经 `GodotInputHandler.onGenericMotionEvent()` 送入原生队列。原触屏事件不重复传入；额外手指及主指抬起后的残余手指被吞掉，避免双指查看或误发左键。左键模式、已开始的普通左键手势与实体鼠标/触控笔保持原路径；不改 Android Surface 或 Godot 坐标变换。
+  - 失焦、暂停、render View 离开窗口及关闭功能时释放已按下右键；锁定选择在普通前后台切换时保留，关闭开关或销毁 Activity 后重置左键。从附加设置返回立即按开关拆除/重建按钮与监听器。开关按当前 profile 的 `settings.save` 保存，full compat 的 `AndroidSettingsMerge` 保留该键；位置独立存入 `floating_mouse_overlay` 偏好。输入流所有权边界回归：`FloatingMouseInputTest`。
+- 可选应用内快捷面板（`android_in_game_overlay_enabled`，默认关）：`GodotApp` 用 `addContentView` 叠可拖动、自动贴边并避开系统手势/刘海安全区的“快捷”入口，点击打开从左侧滑入的无标题快捷抽屉，宽度约占可用屏幕 40%，左侧使用竖向图标页签区分功能页，**不**申请系统悬浮窗权限。抽屉右侧暗色空白区和系统 Back 优先关闭抽屉，所有主操作目标至少 48dp；快捷页在开发者工具开启时用带图标的 MD 卡片展示当前 profile / payload / compat，从附加设置返回游戏时会按当前开关拆除或重建入口。开发者工具（`android_dev_tools_enabled`）启用检查器；写入需 `android_dev_inspector_writable`。只有当前的 **full compat** 包包含 C# `DevToolsHost`；offline bootstrap 或旧完整包会明确提示检查器不可用。Host 独立于其余可选补丁启动，轮询 `<files>/launcher/devtools/request.json`，用 `host.json` ready marker 公布就绪状态，并为 protocol 2 请求原子写入各自的 `response-<uuid>.json`（客户端仍兼容旧 `response.json`）；只读检查器请求在 host 已就绪但未响应时有限重试一次。检查器 Runtime 页支持 STS2/compat C# 根对象反射浏览/简单值改写；Scene 页 scene tree 默认全折叠，每行只显示节点名与按类型字符串稳定散列的高对比类型色，自定义类型隐藏 `managed / native` 斜杠后的 native type；缩进区用 Canvas 自绘 Godot/Windows 风格连接线与加减框，仅 tree 列表超宽时启用横向滚动，打开 Node/Godot 对象后列表强制测量为父容器可用宽度且不可横向滚动，左侧按钮和缩进区切换展开，正文进入 Node，右侧不再有进入按钮。Node 标题/固定信息不显示 Path；Node 与其他 Godot 自定义对象属性使用 `ToString()` 风格预览，并可通过对象实例引用继续嵌套下钻。不可编辑且不可下钻的信息会显示复制图标，点击正文或图标都复制值。顶部统一为等尺寸图标按钮且只在存在返回目标时显示返回键。可写模式下可编辑简单属性和执行临时 GDScript（变量 `root` / `tree` / `node`）；非 Nil 返回值通过可选中、可复制的结果 Dialog 展示，无返回值只提示完成，不提供与脚本能力重复的独立 Node 方法调用入口；写入/脚本操作审计写入 `<files>/logs/dev-tools.log`。它还支持重启游戏进程与 companion 设置 runtime apply。实时日志默认 tail 当前 profile 的 `godot.log`，可切换全局 `sts2.log`，日志正文用 `RecyclerView` 按行复用并按等级着色，右侧提供顶部、底部、自动贴底和筛选齿轮按钮；日志源、等级筛选与搜索框默认隐藏，点齿轮后显示。由于 `GodotApp` 仍使用 Godot DeviceDefault theme，抽屉中的 Material confirmation/edit dialog 必须用 `Theme.Sts2ExtraSettings` wrapper 创建。
+  快捷面板日志页在独立低优先级线程分批读取，每批最多 256 KiB，最多保留 2,000 行、显示筛选后的末尾 500 行；积压分批追赶，不在主线程扫描文件或逐行解码。UTF-8 半字符跨批次保留；未换行但字符完整的末行仍显示，后续内容延长同一行，不拆成重复记录。inode 变化或文件长度缩短触发轮转/截断重置，换源和停止后丢弃旧会话回调。无新增行时不重复提交；普通追加只通知 RecyclerView 的头部移除和尾部插入，筛选、清屏和自动贴底功能保留。
+  同一快捷面板会话切换页签或重新打开日志时，搜索框恢复实际正在使用的查询；清空输入立即撤销文本过滤，不出现空搜索框仍隐藏日志的状态。
+- 如果当前 profile payload 的 `SlayTheSpire2.pck` 存在，添加：
+
+```text
+--main-pack <files>/payloads/<payload_id>/game/SlayTheSpire2.pck
+```
+
+- 否则解压并使用 `bootstrap.pck`。
+
+patched Godot/.NET runtime 随后在 Mono publish 目录中寻找并加载：
+
+```text
+STS2Mobile.dll
+STS2Mobile.ModEntry
+```
+
+调用入口：
+
+- `InitializeGodotSharp(...)`：初始化 GodotSharp bridge。
+- `Apply()`：创建 Harmony 实例并应用 Android 兼容 patches。
+
+## 8. STS2Mobile patch 顺序
+
+以下长列表描述 **full compat**。offline bootstrap 只应用最小反射补丁；其中 `ModelDbRuntimeContract` 按 API 形状而不是游戏版本解析 `ModelDb.Init`，安全接受无参 `Init()` 和带默认 null 的 `Init(Type[]? injectedModelTypes = null)`，正常 null 路径执行原版模型 two-phase，显式 `Type[]` 保留原方法。它还会在接管前验证模型类型枚举、`GetId(Type)`、可写内容字典、模型 ID storage 与基类构造器；未知参数/返回语义或歧义成员会 fail closed。placeholder 先在内存中完整 staging，再原子写入字典，真实构造完成后 probe 才从 `modeldb_initializing` 进入 `ready`。
+
+当前 full compat `ModEntry.Apply()` 主要顺序：
+
+1. temp 目录配置、build info 日志与 `HarmonyAndroidCompat` 后端准备。Android 上默认贴近 `../s2` 的 minimal bootstrap：不启用旧 native resolver / `DMDType=cecil` override，但会在真正的 `MonoMod.Utils` / `MonoMod.Core` 程序集上强制 MonoMod 使用 Android/Mono 后端，避免 HarmonyOS 等 ROM 被误判为 Posix/Linux 后在 `HarmonyLib.PatchFunctions.UpdateWrapper()` 中抛 `NotImplementedException`；`monomod_android_libc_shim` 仍由 AndroidSystem 按需提供指令缓存刷新和 `/proc/self/mem` executable-page patch fallback。`HarmonyMethodReferenceImporterShim` 会在后续大量 Harmony patch 前自检 `MMReflectionImporter` 是否丢失 STS2 方法引用上的 required/optional custom modifiers，必要时用极窄 postfix 原地修正带 modifiers 的 `sts2` 方法导入，避免普通 MOD patch 原方法体时生成无法绑定的动态 `MemberRef`。`EarlyLocalizationFallbackPatches` 会在普通 MOD 加载前保护 `LocString.GetFormattedText()`：Android/Mono 若在 MOD initializer 的 `PatchAll` 阶段提前运行游戏 UI 类型静态构造、而 `LocManager.Initialize()` 尚未执行，只临时返回 `locTable.locEntryKey` fallback；`LocManager.Initialize()` 正常结束后该 fallback 失效，后续本地化异常仍按原样抛出。`DeferredModPatchQueue` 会在普通 MOD initializer 窗口同时拦截 direct `PatchProcessor.Patch()` 与 Ekyso Harmony `Harmony.PatchAll()` 实际使用的逐目标 `PatchClassProcessor.ProcessPatchJob()`。对目标为 `sts2` 程序集 Godot/UI 类型（`MegaCrit.Sts2.Core.Nodes.*`、`MegaCrit.Sts2.addons.*` 或 `Godot.Node`/`Control` 派生类，且存在静态初始化器）的用户 MOD patch/job 排队，等 `ExecuteEssential` 完成 `LocManager.Initialize()`、`ModelDb.Init()`、`ModelIdSerializationCache.Init()`、`ModelDb.InitIds()` 以及原版网络 `MessageTypes.Initialize()` / `ActionTypes.Initialize()` 后按统一入队顺序重放。PatchAll 路径保留原始 `PatchClassProcessor` 和它生成的 job 再交还 Harmony 执行，而不是只重建单个 prefix，因此 Harmony ID、prefix/postfix/transpiler/finalizer/inner patch、优先级以及逐目标 `HarmonyPrepare` / `HarmonyCleanup` 都能保留；同一个 patch class 中不危险的模型/普通 target 仍在 initializer 立即安装且不会在 replay 重复。单个 deferred job 失败会记录并继续后续队列，队列只 flush 一次。`ModelDb.Init` 和安全注册 patch 不进入该队列，带危险静态初始化的模型/resource target 则按上述规则延迟，也不能漏掉原版网络类型表初始化，否则单人战斗结束写 `CombatReplay` 时也会因 `INetAction` 无法映射 ID 而失败。若 MOD 在 `ModelIdSerializationCache.Init()` 前误调用 `AbstractModel.InitId()`，兼容层只跳过该早调用，后续 `ModelDb.InitIds()` 仍会统一完成排序 ID 初始化。早期初始化不得调用 Godot C# API（例如 `OS.GetName()` / `ProjectSettings.GlobalizePath()`），避免 Godot `StringName`/JNI 尚未稳定时崩溃；静态/虚方法 Harmony self-test 默认跳过，仅在 `<files>/launcher/enable_harmony_selftest.flag` 存在时运行，旧 bootstrap 仅在 `<files>/launcher/enable_old_harmony_compat_bootstrap.flag` 存在时作为诊断启用。
+   - custom modifier 修复同时覆盖 `MMReflectionImporter.ImportReference(MethodBase, ...)` 与 `CecilILGenerator` 实际发射使用的 `MethodBase -> MethodReference` helper；后者是 importer hook 在特定 Android/Mono 组合上未进入时的兜底。修复只重新包裹 Cecil return/parameter type 上缺失的 required/optional modifier，保留原 `MethodInfo`、`call` / `callvirt` opcode、instance/struct calling convention 和已有 generic parameter，不把 setter 换成运行期反射 helper，也不为每次游戏属性写入新增装箱/数组分配。合成回归 `port-mod/tools/test-harmony-method-reference-importer.sh` 会先确认打包 importer 可复现修饰符丢失，再覆盖 direct import、独立 emitter fallback、class/struct、closed generic 和最终可执行调用。
+   - 私有 temp 优先使用 Java 已配置环境和标准 Mono publish 路径；两者及 HOME/ANDROID_DATA 全部不可用时，最后才惰性读取 `AppPaths.DataDir/tmp` 并做创建、写入、删除探测。该兜底不得提前缓存 `AppPaths.DataDir` 或覆盖已经可用的 `TMPDIR`。
+
+2. `PlatformPatches` 与 `SavePathPatches` 作为保命 patch 最先独立应用；前者跳过桌面 Steam 初始化，后者重定向当前 launch profile 的存档/设置路径。两组 patch 分别捕获异常，避免后续诊断或 UI patch 在特定 ROM 上失败时导致原版 `steam_api64` 路径重新执行。PC / Steam Cloud 带来的历史记录仍保留原始 `PlatformType.Steam` 元数据；早期本地化保护安装后，`RunHistoryPatches` 只把历史详情 `DisplayRun`、玩家切换 `SelectPlayer` 和玩家图标 `LoadRun` 中的身份查询替换为安全 wrapper：桌面 Steamworks 未初始化或原生库不可用时，本地 ID 回落到 Android/null-platform ID（多人未命中时沿用原版“选择第一个玩家”逻辑），名称回落到 null-platform 已缓存名称或稳定 ID 文本。该补丁不改写历史文件，也不改变 Steam transport、邀请或大厅协议。
+3. BaseLib/RitsuLib/ModelDb/UnlockState 兼容。
+   - 关键时序不变式：MOD 如 YuWanCard/BaseLib 用 `ModelDb.GetEntry` 的 Harmony postfix 给自定义内容 ID 加命名空间前缀（如 `ENCOUNTER.YUWANCARD-KILLER_ELITE`），并按 type **永久缓存**第一次 `GetEntry` 结果。PC 上每个 MOD 的 `PatchAll` 在 `ModManager.Initialize`（`ExecuteVeryEarly`）期间运行，严格早于 `ModelDb.Init`（`ExecuteEssential`），因此 ID 计算时前缀 patch 早已就位。兼容层必须**在 MOD patch 全部应用前，绝不对任何 MOD 模型类型调用 `ModelDb.GetId`/`GetEntry`**，否则会污染前缀缓存并把模型注册到错误 key。
+   - `ModelDbInitPatch` 把 `ModelDb.Init` 替换为干净的 two-phase，并分两层处理占位：
+     - **早期原版 shadow 占位**：`ModLoaderPatches` 在加载任何 MOD 之前枚举 `AbstractModelSubtypes.All`（仅原版），只把未初始化对象放入 shadow registry，不写入原版 `ModelDb._contentById`。早期 `Get<T>()`、`Get(Type)`、`GetById<T>` / `GetByIdOrNull<T>` 及各类别 getter 均通过 canonical 字典的按键读取访问同一 shadow 对象；已有 canonical 内容优先，缺失 ID、null key、错误类别转换仍由原版处理。不能逐个 patch 闭合泛型方法：引用类型共享 native 方法体，会把 `GetId<T>()` 和类型转换固化成错误的 T。两个字典 prefix 只接受 canonical 实例，不暴露其他字典的 shadow；phase 1 原子发布同一对象后移除这两个 prefix，不给稳态游戏字典增加 wrapper。
+     - **MOD initializer shield**：每个普通 MOD 的 `TryLoadMod` 调用期间，`ModelDb.Contains(Type)` 会对“非原版程序集类型，但当前 id 只命中早期原版 shadow 占位”的情况短暂返回 `false`，还原 PC 上 MOD 初始化时 `ModelDb` 尚未被原版模型填充的行为。该 shield 不隐藏原版类型、不隐藏同一 type 的真实重复，也不会在 phase 1/phase 2 后生效。
+     - **phase 1**：`ExecuteEssential` 中、调用 `ModelDb.Init()` **之前**，先把 shadow 占位发布到 canonical ModelDb，再按最终 `ModelDb.GetId(Type)`（MOD GetEntry 前缀此时已生效）补齐全部模型（含 MOD 自定义类型）的占位。这样在 MOD 的 `ModelDb.Init` prefix（在 `Priority.Last` phase 2 之前运行）提前触发 MOD 间静态构造（如 `RELIC.LONG_SNAKE_NECKLACE`）时不会缺失。
+     - **phase 2**：`InitPrefix`（`Priority.Last`）在占位之上原地运行真实静态/实例构造器，跳过原版 one-pass body。部分 MOD 的 `ModelDb.Init` prefix 会自己返回 `false` 并让 Harmony 跳过后续 prefix，因此兼容层同时安装 `Priority.First` postfix 与 `ExecuteEssential` 后置兜底，确保构造 phase 一定执行。
+   - 真正的模型构造仍保留在 `OneTimeInitialization.ExecuteEssential -> ModelDb.Init`；用户 MOD 的 `ModelDb.Init` prefix/postfix 仍会执行（prefix `Priority.Last`，跑完后返回 false 跳过原版 one-pass body，postfix 照常运行）；构造前后清理早期读取产生的派生缓存。`port-mod/tools/test-modeldb-shadow-placeholder.sh` 使用本机原版程序集验证 MOD 窗口内 canonical 数量不变、跨类别/基类的全部按键查询、对象身份、canonical 优先级、其他字典隔离及原版异常语义；phase 1 才发布。
+   - 自定义模型 ID 完全交给原版 `ModelDb.Init` + MOD 的 `GetEntry` patch 自然产生，不再人为迁移 key 或做动态兜底。
+   - `EarlyLocalizationFallbackPatches` 是同一类 Android/Mono eager cctor 问题的本地化侧保护：例如 MinionLib patch `NPotionHolder.UsePotion()` 时，Harmony wrapper 生成可能提前跑 `NPotionHolder..cctor -> HoverTip..ctor -> LocString.GetFormattedText()`；此时 `LocManager.Initialize()` 还在后续 `ExecuteEssential` 中，直接抛异常会让 `NPotionHolder` 在整个进程内永久失败。该补丁只覆盖 `LocManager` 完成前的格式化失败，不改变 `LocManager.Initialize` 的生命周期点。若 UI 类型静态字段直接链式读取 `LocManager.Instance.GetTable().GetRawText()`，则由 `DeferredModPatchQueue` 延后用户 MOD 对该 UI 类型的 Harmony patch，避免 `.cctor` 在 very-early 阶段执行。
+   - `DeferredModPatchQueue` 拦截 direct `PatchProcessor.Patch()` 和 `Harmony.PatchAll()` 的逐目标 job；除 UI/Godot 与带静态初始化器的模型外，`AssetSets` 等类型的静态初始化若经辅助方法、静态字段、构造器或迭代器读取 `ModelDb` 内容或调用 `ModHelper.ConcatModelsFromMods`，也延迟到模型/network 初始化后。`GetId` / 类型发现 / 注册本身仍立即执行，不能提前消费池，再用放宽 `AddModelToPool` 的方式掩盖冻结错误。目标工厂读取模型内容时在工厂执行前整体排队；原 processor/job 保留 owner、排序、PatchAll 元数据和 prepare/cleanup。合成回归覆盖 eager cctor、前后两次池注册、真实消费后拒绝迟到注册、失败隔离和重复 flush；真实 Loadout 三个关键工厂的既有 smoke 覆盖 1205 个目标。
+   - `UnlockStateCompatPatches` 会在 `ModelDb` 初始化完成前让 `ModelDb.AllEncounters` 返回空列表，避免 Android/Mono 因 Harmony patch getter 提前运行 `UnlockState..cctor` 时枚举到尚未构造/注册完成的 MOD encounter；初始化完成后会修复可能提前创建的 static readonly `UnlockState.all`，恢复正常“全部 encounter 已见过”的语义。
+4. Release info、settings、display、font/UI scale；其中 `AppPaths` 从 Mono publish 目录或 Android 进程包名推导 `<files>` 后读取 `launcher/selected_instance.json`。`AndroidFontCoveragePatches` 不再把 Godot 的 Android 系统字体枚举当作 CJK 等本地化字形的可靠来源：`NGame._Ready` 时按 `LocManager` 当前语言从原版 `FontManager` 取得 payload 已内置的 Regular/Bold/Italic 字体，为 `ThemeDB.FallbackFont` 和现有常见文本控件构造“原基础字体 + 原版本地化字体”的显式 fallback；后续 `Label`、`RichTextLabel`、常见输入/列表控件与 `Label3D` 只在 `SceneTree.NodeAdded` 单节点路径补齐，原字体已有该语言字形时不覆盖。组合字体按基础字体/本地化字体缓存并保留已有显式 fallback，不把英文/数字整体替换成 CJK 字体，也不向 compat overlay 重复打包 payload 已有字体；某个第三方控件 fallback 失败与字体大小缩放分别捕获，不能中断原来的字号订阅。`DisplaySettingsPatches` 是兼容层中根窗口 `ContentScaleMode` / `ContentScaleAspect` / `ContentScaleSize` 的唯一协调者，逻辑 owner 优先级为 `PortraitCompat > FixedAspect > UiScaleAuto`，根 Window 始终为 `CanvasItems`。显式 `android_screen_rotation_mode=portrait` 时使用 `Expand` 与 1080 宽、跟随 native 竖屏比例的逻辑画布；固定横屏比例和 UI scale 不覆盖该画布，但原保存值保留，离开竖屏后恢复原 owner。Auto 比例使用 `UiScalePatches` 提供的 UI scale target，固定比例使用对应 fixed target；owner 会在调用任何 Godot Window setter 前发布。所有 setter 均 compare-before-set，同时使用重入保护和 single-flight deferred 队列；`UiScalePatches` 不再直接写 `ContentScale*`，`NGlobalUi.OnWindowChange` / `NMainMenu.OnWindowChange` 只抑制原争写并请求一次延迟重算。`NGame._Notification` 只在 `NotificationApplicationResumed` 时失效 settings cache 并合并一次 deferred runtime apply，窗口焦点通知不再重建 viewport。每个 resume generation 在 canonical apply 后会 deferred 校验一次 Mode/Aspect/Size/Factor；若目标被覆盖，最多 compare-before-set 修复一次并再做只读终检，仍不一致只输出 warning，不进入循环重试。target revision 会让校验跳过期间发生的合法新设置，避免旧 resume 目标覆盖用户刚修改的显示配置。
+
+   `fullscreen_render_size` 不参与上述 owner 或 scene Window 的逻辑 ContentScale；游戏内修改设置后，compat 会在同一次 runtime apply 中立即切换根 renderer render target。顺序固定为先完成高层 `ContentScale*` setter，再调用 `RenderingServer.ViewportSetRenderDirectToScreen(rootRid, false)`、`ViewportSetSize(rootRid, target)` 和 `ViewportSetGlobalCanvasTransform(rootRid, scaledTransform)`。这只改变 RenderingServer 侧 RT 尺寸与 canvas 输出比例，scene `Window` 的 Size/ContentScale/输入逆变换保持原样，Android `Surface` 也不改变；不得调用 `SurfaceHolder.setFixedSize()` 或 `ViewportAttachToScreen()`。请求 `0x0` 时恢复当前 native attachment 的 RT 尺寸和高层 ContentScale 计算出的原始 global canvas transform。非零预设按当前 native attachment 比例采用 Expand 覆盖语义：以请求矩形为最低覆盖范围并保持 native 宽高比，例如 `2400x1080` 的超宽 attachment 选择 `1280x720` 后实际 target 为 `1600x720`。自定义目标长边上限为 `max(4096, native 长边)`，避免高分辨率设备恢复原生时被反向截断。根 Window `SizeChanged`、application resume 和一致性 repair 都会在逻辑 setter 之后重投这三个 RenderingServer 状态，防止窗口变化或高层 ContentScale 写入把动态目标复位。`global_scale` 始终独立作为 `ContentScaleFactor` 生效，`ui_font_scale_percent` 也独立；`user://ui_scale.cfg` 的原版 UI scale 在 FixedAspect/PortraitCompat 期间保留选择但不控制 Size，回到 Auto 横屏后自动恢复。显示设置还会读取 `android_screen_rotation_mode`：`auto` 映射 Godot `SensorLandscape`，`user_landscape` 由 Java `GodotApp` 的 `SCREEN_ORIENTATION_USER_LANDSCAPE` 托管，兼容层不再调用 Godot `ScreenSetOrientation()` 覆盖，`landscape` 映射普通横屏，`reverse_landscape` 映射 180° 横屏，`portrait` 映射 Godot `Portrait` 与 Java `SCREEN_ORIENTATION_PORTRAIT`；旧 `android_flip_screen_180` 只作为兼容 fallback 和同步字段保留。Java `GodotApp` manifest 默认 `sensorLandscape`，并在 `onCreate`、`onResume` 与 Godot 主循环开始后按同一字段调用 Android `setRequestedOrientation()`，避免 Activity 层固定横屏导致自动 180° 旋转或显式竖屏无效。
+5. 移动端 layout/input、事件/商店/奖励/战斗背景等 UI 修正。
+   - `MerchantLayoutPatches` 保持商店商品面板相对居中锚点的位置：以原版 1080 高度下的打开位置为基准，动画只插值锚点偏移，并用商店当前 Control 高度换算局部 Y。游戏缩放 `global_scale`、UI Scale、两者组合以及动画进行中的缩放变化因此使用同一位置规则，先缩放再打开、打开后缩放和关闭重开不再产生额外的底排越界。不要读取 `ContentScaleSize.Y` 当作实际可用高度，它不包含 `ContentScaleFactor`；也不要把打开动画改回固定绝对 `position:y`。商品尺寸、原版动画曲线和购买逻辑保持不变；极端放大本身仍受屏幕可用空间限制。
+6. Android UI safety、游戏内设置入口、shader overlay、transition material 防黑屏、Android back/touch/controller、奖励/商人二次确认、移动端 tooltip 显示策略、tap preview、hand layout，以及超过四人的房间 UI 扩容。`ExtendedMultiplayerRoomPatches` 不改宝箱生成、投票、奖励归属、休息点选项或联机序列化：只有真实玩家数超过四人时，才在原版 `NTreasureRoomRelicCollection.InitializeRelics()` 前按同步器的遗物数量实例化缺少的 `treasure_relic_holder`，随后用稳定网格重排；默认焦点对候选遗物少于玩家数的情况取安全可见槽位，第五只及后续奖励/剪刀石头布手势按玩家数分散到屏幕边缘。休息点则在原版 `_Ready()` 按玩家索引前创建有序角色容器，避免第五名玩家访问四元素列表越界。四人及以下保持原版布局。`mobile_tooltip_mode` 默认 `immediate`，保持 PC 端悬停即显示；在附加设置“设置 → 操作 → Tooltip 显示”切到 `long_press` 后，`MobileTooltipPatches` 会在 `NHoverTipSet.CreateAndShow*` 前建立当前 owner 的长按计时，允许原版创建并完成对齐后立即隐藏 tooltip，并通过 tooltip owner 的 `GuiInput` / `MouseExited` 与 `NGame._Input` 共同跟踪触摸，只在同一触点按住约 1 秒且未明显拖动时临时显示，松手或移动过大后再次隐藏（不因单纯 `MouseExited` 取消，以免 hover 动画导致控件在静止手指下移动）。若原版在长按过程中频繁 `Clear()`/重建 hover tips，兼容层会保留当前 owner/计时状态，避免计时被每帧重置；游戏内设置页切换该选项时会刷新 `AndroidSettingsBridge` 缓存并立即移除或显示已有普通 hover tooltip，`hidden` / `long_press` 模式会阻止后续普通 hover tooltip 创建，但不拦截 inspect card/relic/potion 等显式详情页面自己的说明区域。
+- `MobileReactionButtonPatches`：原版 PC payload 已包含反应轮盘、表情资源和 `NReactionContainer` 网络同步，但游戏场景没有移动端入口。兼容层在 `NGame._Ready` 后注入一个与参考实现同尺寸的右下角触摸按钮；Android 判定采用 `OS.HasFeature("mobile") || OS.GetName()=="Android"`，并在 `NReactionContainer.InitializeNetworking()` / `DeinitializeNetworking()` 后立即刷新，不依赖 managed `_Process` 是否及时调度。`show_mobile_emoji_button=true` 且处于多人同步、可见多人大厅远程玩家容器，或角色选择/奖励/战斗等待面板时显示；低频轮询负责设置热变更和同一 scene 内等待面板切换。状态变化会输出 `os/mobile_feature/setting/network_ready/reaction_available/scene/position/size`。按住按钮打开原版轮盘，拖动按原版八方向分区和 8px deadzone 更新 wedge；松手发送前必须把按钮的 viewport 中心通过 `NReactionContainer.GetGlobalTransformWithCanvas()` 的逆变换还原成该容器的 control-space 位置，再显式调用原版 `NReactionContainer.DoLocalReaction`，让本地 `NReaction` 动画位置与 `ReactionSynchronizer` 的网络归一化输入保持一致，不重建 `ReactionMessage` 或 Android 固定消息表。按钮中心通过 `GetGlobalTransformWithCanvas()` 转为与触摸事件一致的 viewport 坐标；轮盘再通过父 CanvasItem 的逆变换计算位置修正，不得混用 viewport 触点和 canvas `GlobalPosition`。原版 wedge 在 `_Ready()` 缓存的 `_defaultPosition` 可能早于响应式 ContentScale/父 Control 尺寸稳定，后续 `OnSelected()` / `OnDeselected()` 若继续使用旧值，会让每个经过的 wedge 落到右下方旧基准，转一圈后看似整轮漂移；兼容按钮首次显示时必须捕获八个 anchored wedge 的当前中性位置、父轮盘尺寸与 anchor，按后续轮盘尺寸重算中性位置并同步 `_defaultPosition`，显示/隐藏时终止旧 tween 并立即复位。原版 25px 径向选中强调保留。wheel show 日志输出 `alignment_error`、`wedge_reset_max` 和 payload 默认位置最大差值；dispatch 日志输出 texture、viewport/control position 与 network ready。按钮关闭、失焦、离开多人大厅或离开等待状态时会取消未完成选择并隐藏轮盘。
+  显示轮询每 250ms 只检查少量已索引候选，不再递归遍历整个场景。`MobileReactionSurfaceTracker` 初次启用时扫描一次已进树的已知大厅/等待控件，之后由 `SceneTree.NodeAdded` / `NodeRemoved` 增量维护；节点隐藏祖先、当前 scene 切换、动态 overlay、移除和重入均参与有效性判断。关闭表情开关或按钮退出树时退订并清空索引，重新启用/进树时重建；网络同步已经就绪时直接使用原版 multiplayer 状态。保留大厅/等待界面的表情入口，但避免单人和按钮隐藏时仍进行全树扫描、产生大量 Godot 子节点数组与名称 wrapper，造成周期性主线程工作和 GC 压力。
+
+  稳态热路径维护约束：`MobileTooltipPatches` 在默认 `immediate` 模式下先返回，不建立逐帧追踪；需要接管时复用同一 owner/tip 的弱引用，详情界面分类按 owner 生命周期缓存，`TreeExiting` 后失效，以覆盖重新挂树。长按达到阈值或 tooltip 被重建时才执行完整显示切换，稳定显示时不反复扫描其他 tooltip，也不重复写相同的 `Visible`；原版 tooltip 跟随位置的 `_Process` 仍保留。长按期间 `Clear()`/重建必须延续同一按压计时，松手/明显拖动和详情页豁免不变。
+
+  触摸释放专用入口先过滤事件类型，再读平台/设置；`TouchInputPatches` 按实际运行时类型缓存反射成员，保留 MOD 子类型的查找边界。手柄兼容入口不为非轴事件创建映射迭代器。表情按钮只在有效按压期间把输入路由绑定到该按钮与当前 `NGame`，取消、松手、隐藏或退出树时解除；空闲输入不再按名称查找按钮，旧按钮退出不得清除新按钮的路由。
+
+  `IntentAnimationPatches` 使用 Harmony 字段注入读取当前动画名、Sprite 和浮动参数，不逐帧查找字段。已有原版 `_animationFrames: List<Texture2D>` 的 payload 直接复用该列表；旧 API 则按当前意图实例惰性缓存已播放纹理帧，换动画/退出树后解除引用。保持兼容层现有 24 FPS 动画和浮动 tween，不扩大预加载范围；`UpdateIntent()` 以外的战斗状态更新也必须立即反映到播放动画。legacy staging 同时注入 `IntentAnimationPatches.cs`、`TouchInputPatches.cs` 和 `AndroidInputCompatPatches.cs`。
+
+  合成回归使用实际打包的 Harmony、不包含商业游戏实现：在仓库根加载 `.env` 后运行 `"$DOTNET_BIN" run --project port-mod/tests/MobileHotPath.Tests -c Release -p:HarmonyReferenceDir="$PWD/android/assets/dotnet_bcl"`，再追加 `-p:LegacyIntent=true` 验证没有原版动画帧列表的旧 API。覆盖模式切换、长按重建、拖动/松手、详情父节点迁移、稳定帧分配预算、意图动态变化和释放事件语义；本机合成分配结果不能直接解释为 Android FPS 提升。
+
+  Shader 兼容不再 patch `Node.AddChild` / `AddChildSafely` 并重复扫描整棵新增子树。`NGame._Ready` 后仅在开关启用时订阅 `SceneTree.NodeAdded`，收集实际新增的 CanvasItem，同一批节点在父子 `_Ready` 全部完成后的 idle 回调统一检查，避免漏掉父节点 `_Ready` 对子材质的赋值。被移除/释放的节点跳过；初次安装与手动启用时才遍历已有树，使用索引而不是 `GetChildren()` 数组。关闭时退订，默认关闭路径不会增加逐节点设置查询；重新启用会补齐已有节点。替代 Shader 按有限路径表复用，每个节点仍获得独立材质副本，不修改原始共享材质，卡面 `canvas_group_mask_blur.gdshader` 仍不替换。关闭开关不会把已替换材质恢复原版，需要重启才能完全撤销。
+
+7. intent animation、quick restart、lifecycle/performance。`QuickRestartPatches` 在 pause menu 提供 Android 内置“重打/Retry”按钮：快速重开会先等待当前 run save 任务，再读取 autosave；淡出后清理旧 run，并执行原版保存恢复入口（`RunManager.SetUpSavedSinglePlayer()`，`v0.107.0` 为 `SetUpSavedSingleplayer()`；返回 `Task` 的版本会等待完成）以完整初始化 `NetService` / `MapSelectionSynchronizer` 等同步器后才调用 `NGame.LoadRun()`，避免资源预加载关闭或 IO 较慢时新 `RunState` 提前进入地图初始化、触发 `MapSelectionSynchronizer.GetVote()` 越界；若淡出后任一步失败，会先尝试 `FadeIn()` 解除黑屏遮罩，再显示错误弹窗。`AndroidAssetCacheLifecyclePatches` 只修正 Android 资源释放生命周期：原版私有 `AssetCache.RemoveAndGetResource()` 仍照常从 cache 索引移除条目，原版 asset-set 选择、missed-set 清理和兼容层 protected-path 过滤均不变，但它的返回值会被置空，从而阻止 `UnloadAssets()` / `UnloadMissedCacheAssets()` 显式 `Dispose()` 仍可能被节点、对象池或异步任务持有的 Godot `Resource`。`LifecycleAndPerformancePatches` 保留默认预加载范围和 warm-cache 保护策略；关闭预加载只在内层 `LoadAssets` 阻止加载并返回已完成的空 session，外层 `LoadAssetSets` 仍执行原版 cache/missed-set 淘汰，不再因开关跳过整段维护：它在 `NMainMenu._Ready` 后启动安全 deferred preload，并在需要细分或额外 warmup 时接管原版 `LoadCommonAndMainMenuAssets()`：
+   - `preload_enabled`：总开关，默认 `true`。
+   - `preload_startup_common_enabled`：主菜单后加载 `AssetSets.CommonAssets`，默认 `true`。
+   - `preload_startup_main_menu_enabled`：主菜单后加载 `AssetSets.MainMenuSet`，默认 `true`。
+   - `preload_runtime_enabled`：保留 run/act/room 资源预加载，默认 `true`。
+   - `preload_menu_hotspots_enabled`：额外实例化单人/多人常用子菜单，默认 `false`。
+   - `preload_vfx_mode`：`off` / `hot` / `full`，默认 `off`；`hot` 仅实例化高频战斗 VFX，`full` 递归 `res://scenes/vfx/**/*.tscn`。
+   - `preload_vfx_tree_warmup_enabled`：实际播放 VFX 预热，默认 `false`；开启后把 VFX 临时加入场景树跑帧，让粒子、材质和首批动画帧真正执行。
+   - `preload_vfx_tree_warmup_scope`：VFX 实际播放范围，默认 `safe`；`safe` 只跑安全名单，包含常见战斗 VFX 与猎人小刀/匕首 VFX；`all` 会逐个尝试让 `res://scenes/vfx/**/*.tscn` 全部进树跑帧，单项失败会记录并跳过，主要用于卸载重装后填充 Godot shader cache 的高内存诊断，不会自动执行卡牌/怪物战斗逻辑。
+   - `preload_vfx_tree_warmup_frames`：普通安全名单 VFX 跑帧数，默认 `3`，启动器提供 `1/3/6/12`；小刀/匕首 VFX 会使用更高下限。
+   - `preload_vfx_retain_cache_enabled`：保留已预热 VFX 场景缓存，默认 `false`；开启后与缓存保护配合减少战斗中重复首次实例化。
+   - `preload_combat_animation_warmup_mode`：战斗动画预热，默认 `off`；当前房间实际出场的角色逐个创建独立原生 `SpineSprite` 副本，用 `Duplicate(0)` 排除脚本、信号连接、分组及场景重实例化，进树前移除子节点以避免附带音频/粒子自动播放。`safe` 只采样按名称筛选的安全 clip；`all` 采样全部可用 clip，每个角色最多 128 项。副本在临时全屏遮罩后绘制并及时释放，不修改活体角色 animation state、不调用 `SetAnimationTrigger()`、不执行状态图条件或游戏事件回调；Spine API 不支持时跳过该角色，不回落到活体预热。代价是 trigger 附带的 VFX/音效不再由动画预热覆盖；独立命中特效选项保持原行为。
+   - `preload_combat_animation_warmup_frames`：每个独立 Spine clip 的采样帧数，默认 `1`，启动器提供 `1/2/3/6`；只处理当前战斗房间，不在启动页实例化全游戏所有怪物。
+   - `preload_combat_hit_effect_warmup_enabled`：战斗命中特效预热，默认 `false`；开启后在当前战斗房间遮罩后走真实命中渲染路径，实例化伤害数字、命中火花、斩击/钝击 VFX，并以 0 音量触发当前怪物和常见敌人受击 FMOD 事件来预热 sample data，不会改血量、出牌或战斗历史。
+   - `preload_combat_code_enabled`：额外预热攻击/伤害/VFX 托管方法，默认 `false`。
+   - `preload_shader_mode`：`off` / `load_resources`，默认 `off`；仅加载已知 shader 资源，不保证 GPU pipeline 已完成编译。
+   - `preload_protect_warm_cache_enabled`：保护已预热缓存，默认 `true`；compat 层会过滤原版 `AssetCache.UnloadAssets()` / `UnloadMissedCacheAssets()` 对 Android warm cache 的卸载，降低房间/战斗资源集切换后重复首次加载的概率。卡牌 banner/frame 与卡面 blur/mask `ShaderMaterial` 额外作为 Android runtime pinned assets 固定保护，即使运行时预加载关闭、这些资源先通过 missed-cache 路径加载，也不能被房间切换 cleanup 释放，否则后续 `NCard.Reload()` 复用材质时会抛 `ObjectDisposedException: Godot.ShaderMaterial`。
+   - `preload_gameplay_assets_enabled`：实战资源补全包，默认 `false`；额外收集并加载能力/遗物/药水图标、意图、角色、Act、遭遇/怪物和保留的 VFX 资源，内存占用更高，主要供“尽量全热完”测试使用。
+   - `preload_learned_assets_enabled`：学习漏载资源，默认 `true`；实战 miss 写入 `<files>/launcher/preload-learned-assets.json` 的 schema 2 单一快照，最多保留 512 条。快照绑定当前 profile、game/MOD 路径、游戏与兼容程序集 MVID、实际已加载 MOD 的顺序/版本及文件长度/mtime；只有相同上下文才在后续启动加入 warm cache。旧无上下文数组和不匹配快照不复用，而是重新学习；保存使用同目录临时文件原子替换，不累积多份历史清单。切换配置后首次可能重新遇到资源加载，避免把另一版本或 MOD 组合的资源路径提前加载到当前游戏。
+   - 隐藏诊断字段 `preload_debug_enabled` 只供 ADB 自动化和本地排查使用；`tree_warmup` / `aggressive` 预加载 profile 会开启安全名单 VFX 进树跑帧、当前房间安全战斗动画预热、战斗命中特效/受击音效预热，用来判断卡顿来自资源未覆盖还是未触发实际渲染/动画/音频预热；`vfx_full_tree` 会启用全 VFX 场景进树探测；`animation_full` 进一步启用当前房间全部 Spine clip 采样并同时启用全 VFX 场景进树探测。摘要日志会分别统计 `resource_only`、`tree_warmed`、`tree_ineligible` 和 `tree_failed`，VFX warmup 完成日志还会输出 `<files>/shader_cache` 的前后文件数/字节数；显式开启 `preload_debug_enabled=true` 后，预加载完成后继续发生的 `AssetCache.LoadAsset` miss 会标记 `postStartupPreload=true` 并按资源类别汇总，也会输出逐资源/逐动画细节。Godot 渲染侧会把已编译 shader 变体持久写入 `<files>/shader_cache/**.cache`，因此首次真实绘制后的 shader 编译收益可跨进程和设备重启保留；兼容层自己的 protected warm cache 只是 `PreloadManager.Cache` 内存保护，不跨进程。
+   Android 附加设置页在顶部“系统”分区的系统卡片中显示 `preload_enabled` 总开关、预加载下方的 `android_display_refresh_rate_mode` 三挡单选（默认高刷 / 请求 60Hz / 跟随系统），以及默认关闭的性能 overlay 开关；游戏内 Android 设置也提供同一刷新率选择，写回后通过 Java bridge 立即更新当前游戏 Activity 的请求。预加载右侧箭头打开预加载详细管理 BottomSheet，默认不会自动展开。总开关开/关只写入自身，不改写上述细分项目；BottomSheet 的“恢复默认”只重置细分项目，不修改 `preload_enabled`。预加载详细 BottomSheet 刚打开时内容区上滑会切到全屏展开，展开后滚动内容区不会下拉关闭，只有顶部手柄接受下拉关闭手势。默认组合保持本次改动前的预加载行为，不额外启用 VFX/菜单/shader/code/gameplay warmup，但会保留保护已预热缓存与学习漏载资源。
+   缩放事件订阅随场景节点 `TreeExiting` 立即解除、重新进树恢复，重复 Ready 不叠加，避免旧房间、事件布局和主菜单被静态事件长期持有。资源释放仍保留 disposal guard，不新增强制 GC 或提前 Dispose；事件初始化也不新增吞异常或“假成功”兜底。
+   `AndroidParticlePreprocessPatches` 只在背景初始化后处理已知瀑布巨人/欧罗巴斯背景中的标准持续环境粒子：preprocess 超过两个寿命周期时缩为一个完整周期加原相位余数，不改 amount/material/lifetime/speed。爆发型、一次性、拖尾、sub-emitter、未知材质和本来不超过两周期的粒子不改；因此欧罗巴斯长寿命星点和爆发型特效并不因这个补丁被截短。这是减少首次背景预模拟负担的有限修正，不代表已确认具体闪退或卡死的根因。合成边界回归：`port-mod/tools/test-resource-safety.sh`。
+
+   兼容层的通用/主菜单资源、学习缓存/实战补全资源与 VFX 启动预热已恢复为引入后台加载之前的同步路径：在 Godot 主线程调用 `ResourceLoader.Load`，通用资源和 warm cache 每处理 8 项让出一帧，VFX 每项加载、实例化和释放后让帧；开启实际播放预热时仍等待既定渲染帧数。保留原有 `Reuse` / `Ignore` 缓存语义、预加载范围、缓存保护和全部设置，不再通过共用的 `_loading` 标志等待后台请求。单个同步加载仍可能暂时阻塞主线程，分批让帧不是硬实时保证。此回退只改变启动预热，不撤销下面原版 `AssetLoadingSession` 的异步加载及其协作帧预算，也不撤销 Shader 节点处理优化。
+
+   三项运行时优化默认随 full compat 生效，不新增设置或改变画质：
+
+   - `CombatVfxPoolPatches` 在当前战斗房间内复用原版 `NDamageNumVfx`、`NHitSparkVfx`、`NShivThrowVfx`，并保守加入粒子型 `NBigSlashVfx` 与 `NFireBurstVfx`。只限制空闲保留数量（16/8/8/2/2），并发超出时继续正常创建，不丢弃特效。新增两族只接受已知 Node2D/GPUParticles2D 树与 Task 播放/CTS 复位合约；不扩充通用节点快照类型、不自动枚举其他 VFX、不复用卡牌/角色/Spine/动画播放器状态。原版工厂、Ready、动画、随机数、ScreenShake 与等待流程仍执行；正常结束后延后归还，停止粒子并关闭旧 CTS，重租恢复节点变换/颜色/可见性后重新 Ready、Restart 粒子并创建新 CTS。小刀仍复用实例独立的染色材质，斩击/火焰保持原版节点 SelfModulate 染色。每次播放携带独立租约，迟到的旧异步释放不能影响新播放；外部取消/移除不进入池，离房释放空闲实例。未知节点/子脚本、修改工厂/生命周期/ApplyTint/ModulateParticles 的其他 Harmony owner 保留原版分配和销毁。不改变特效数量、伤害/网络、预加载范围或 GC，也不承诺消除首次加载/首次 shader 编译卡顿。
+   - `RuntimeAssetLoadingPatches` 给原版 `AssetLoadingSession` 的提交、状态查询、完成收尾及 VFX 阶段加出队前预算。各阶段每帧最多处理 8 项，共享约 2ms 的协作时间预算；同帧多次 Process 不能重置预算。限额时保留真实队列和在途状态，让原版稍后继续处理，不提前完成、不丢请求、不改变原版错误/同步 fallback 路径及 VFX 串行约束。原版 128 在途普通请求上限没有被解释为线程数或提高。更多让帧可能延长加载总时间。
+   - `AndroidFontSizeScaler` 统一处理字体缩放，固定元数据 StringName，整树刷新只读取一次倍率；默认 100% 不为未缩放的控件创建无用字号覆盖，相同字号/自动字号边界不重复写入和触发调整。保留显式字号、原始基准、100% 恢复、重入树与自动字号处理；语言字体 fallback 不移除、不替换为系统字体。
+
+   下述原生回归覆盖租约迟到、超额完整创建、空闲上限、材质隔离/复用、房间退出、外部移除、MOD 生命周期 opt-out、同帧重复调度、错误后完成，以及字号继承/幂等/恢复；新增斩击/火焰用例覆盖真实粒子重播、根/子节点状态与新 tint/scale、CTS、2 槽满溢、未知子脚本及 foreign tint opt-out，已观察新增前失败、新增后通过。可选环境变量 `STS2_FRAME_REFERENCE_DLLS` 接受分号分隔的本机原版 `sts2.dll` 路径，以 Cecil 只读验证各目标的出队 IL、五族 VFX 工厂及播放/复位字段；不加载或执行游戏类型，不携带商业 DLL。
+
+   原生回归 `port-mod/tests/FramePreparation.Tests` 使用 Godot 4.5.1 .NET 与实际打包 Harmony，只构造合成场景/损坏资源。覆盖 Shader 父 `_Ready`、重入树、释放、材质隔离和开关切换，以及前述 VFX 池、运行时资源队列错误恢复和字体缩放；旧启动后台加载器的单请求/取回测试已随该加载器删除。准备好官方 .NET 版 Godot 路径 `GODOT_BIN`，在仓库根加载 `.env` 后运行：
+
+   ```bash
+   "$DOTNET_BIN" build port-mod/tests/FramePreparation.Tests -p:HarmonyReferenceDir="$PWD/android/assets/dotnet_bcl"
+   # Linux: expose libgcc unwinding symbols to the embedded .NET/MonoMod host.
+   LD_PRELOAD=libgcc_s.so.1 DOTNET_ROOT="$(dirname "$(realpath "$DOTNET_BIN")")" "$GODOT_BIN" --headless --path port-mod/tests/FramePreparation.Tests
+   ```
+
+   损坏资源用例会输出预期的 Godot Parse Error，最终必须看到 `PASS` 且进程成功退出。桌面 headless 回归不等于 Android GPU/帧率实测；高刷请求、原版 FPS 上限、VSync、画质和特效数量均未因这项优化而改变。
+
+8. LAN bootstrap。`LanMultiplayerBootstrapPatches` 在主菜单就绪后才尝试应用本地 LAN 兼容补丁；若 `settings.save` 中 `lan_multiplayer_enabled=false`，或已加载 `sts2_lan_connect` / STS2 Game Lobby 大厅 MOD，`LanMultiplayerPatches` 会整组跳过，避免 Android LAN host/join、玩家 ID 等适配与大厅 MOD 自己的联机协议 profile 冲突。内置 LAN 补丁只处理 Android transport/UI/settings/player/save 兼容，不 patch `MessageTypes.ToId`、`MessageTypes.TryGetMessageType` 或 `NetMessageBus.TryDeserializeMessage`，也不维护固定消息表；消息类型发现、排序、ID 与序列化/反序列化始终由当前 payload 对应版本的原版实现负责，因此 Android 与未修改 PC 使用同一 wire protocol，普通 MOD 自定义 `INetMessage` 也继续按原版规则参与排序。v0.111.0 构造 host/client service 时额外传入 `PeerVersionInfo.LocalDefault()`，随后完全交给原版 transport-level `HandshakeManager` 在消息总线启用前校验游戏版本、ModelDb hash 和 gameplay/non-gameplay MOD；Android 不复制握手数据结构，也不回退旧 lobby-message 校验。启用本地 LAN patch 时，兼容层还会拦截多人读档 canonicalize 的本地玩家 ID：如果当前自定义平台/玩家 ID 不在 `current_run_mp.save` 的玩家列表中，会优先使用隐藏稳定字段 `lan_multiplayer_save_player_id`、旧自动 LAN ID 或单玩家存档中的唯一 `NetId`，避免用户修改自定义平台 ID 后旧多人存档被误判为不属于本机。`max_multiplayer_players` 只扩展 host/lobby 容量；超过四人的运行仍属实验模式，本次已覆盖宝箱和休息点的确定性四槽故障，但不能据此认定原版所有房间和任意配置人数都已兼容。
+9. `ModLoaderPatches`。
+10. save diagnostic。
+11. `RenderDiagnosticPatches` 后置调度；它只用于设备/渲染信息采集，调度异常会记录但不阻断 Steam 跳过和存档路径重定向等核心 patch。
+
+失败时 `ModEntry` 会按 patch group 记录异常；部分 patch 失败可能导致后续游戏启动不完整，因此 `sts2.log`（应用内 logcat 采集）、ADB logcat 和 `godot.log` 是首要诊断来源。
+
+### Android 音频路由与后台静音
+
+- **Bank 版本**：APK 中的 Android FMOD 核心/Studio/Godot 原生桥一起与 PC 版 2.03.06 对齐；打包从本机 FMOD Android 插件来源校验三件套 SHA 后替换旧 2.02 参考库。原版与 MOD bank 能否加载仍取决于实际文件/平台内容；不能仅凭格式头或成功打包断言 MOD 音频已在真机恢复。构建配置见 [构建说明](../build/building-and-packaging.md#4-同步大型-runtime)。
+- **耳机路由**：Java FMOD shim 同时支持当前 native 的 `getDevices(int)` / 设备名/类型和旧接口 `getAudioDevices(int)`，统一过滤 remote-submix。接收有线耳机广播和 Android 音频设备增删回调；输出变化同时发送设备枚举更新与 AAudio 重连通知，包含 USB、经典蓝牙和 BLE。输出仍由 Android 默认媒体路由选择，不强制扬声器或通话 SCO。
+- **后台静音**：full compat 的 `AndroidAudioLifecyclePatches` 在游戏场景 Ready 后接管原版后台静音节点，遵守游戏内 `PrefsSave.MuteInBackground`。失焦/暂停时立即将 FMOD 与 Godot 音量设为零，并提交一次 `FmodServer.update()`，不再等 1 秒 Tween。FMOD Studio 音量修改会先进入命令队列，[必须调用 update 才会提交执行](https://www.fmod.com/docs/2.03/api/studio-guide.html#studio-system-processing)。恢复前台且应用/窗口均有焦点后，恢复当前 `SettingsSave.VolumeMaster`；用户原本设为零仍保持零。这里保证后台无声，不改变曲目播放进度，也不重建渲染窗口。offline bootstrap 与旧 full 包没有此修复。
+- **部分设备无声**：设置 → 系统中的“声音兼容模式”在下次启动前禁用 FMOD AAudio 与低延迟输出，使用旧式输出路径；修改后需重启游戏，代价是可能增加延迟。旧版本的开关没有接到当前启动链路，不能据此判断设备已经测试过兼容路径。此模式不是所有无声问题的通用修复，缺失 bank、原生初始化失败等仍需日志区分。
+- **验证**：停帧与命令提交回归使用不含商业代码的 `port-mod/tests/AndroidAudioLifecycle.Tests`，以 `HarmonyReferenceDir` 指向 `android/assets/dotnet_bcl` 运行。真机仍需检查播放中插拔 3.5mm/USB 耳机、蓝牙连接/断开、Home/锁屏/回前台，以及无声设备开启兼容模式后的冷启动。记录设备/Android 版本、耳机类型、full compat target，以及 `FMOD`、`AAudio`、`AudioTrack` 和 `Android background audio` 日志。没有真机验证不能宣称具体 ROM 已修复。
+
+加载本机 `.env` 后可运行后台静音回归：
+
+```bash
+"$DOTNET_BIN" run --project port-mod/tests/AndroidAudioLifecycle.Tests \
+  -c Release "-p:HarmonyReferenceDir=$PWD/android/assets/dotnet_bcl"
+```
+
+## 9. Overlay PCK 加载
+
+`ShaderCompatibilityPatches` 延迟等待 Godot main loop 就绪后加载：
+
+```text
+OS.GetDataDir()/port_compat.pck
+```
+
+成功后通过 `ProjectSettings.LoadResourcePack()` 挂载资源。是否执行替换由 Android 附加设置 `shader_compatibility_mode` 控制；开关关闭时不订阅 `SceneTree.NodeAdded`，也不处理已有节点。shader 兼容使用 `port_compat.pck` 中 `res://shaders/mobile_compat/*.gdshader` 下的独立移动 shader variants，不改写 payload 中的原版 shader 或共享 `ShaderMaterial`。
+当前 path/identity 表已覆盖原有 screen effects 以及新增的普通卡牌 portrait blur、非古卡 canvas-group blur、water reflection、flipbook / row-flipbook、screen chromatic aberration、HSV、scry reveal、rest-site light 与 Vantom oil variants；内嵌 VisualShader 的 hash allowlist 覆盖 stepped-fire flat/add/dark、blood wall、molten fist、Aeonglass ray 与 slash 等已生成变体。每个 variant 都必须保留原 material 实际使用的 uniform 与纹理，并保留其 `TIME`、`SCREEN_UV`、`INSTANCE_CUSTOM`（若原 shader 使用）及 alpha/blend 语义；screen-sensitive variant 必须继续取屏幕内容，不能退化成纯白或纯黑占位。该行为约束不宣称 Android GPU 与桌面逐像素一致。
+
+替换只覆盖已实现且可观察的有限边界：
+
+- 具有稳定内置 `ResourcePath` 的 shader/material 只按兼容层的精确路径表处理；未命中路径表的资源保持原样。
+- inline `VisualShader` 不按资源对象身份猜测，而按生成代码的 SHA-256 命中已审计 variant，并且 source path 还必须通过内置前缀 allowlist（`res://scenes/`、`res://images/`、`res://shaders/`）。`res://mods/` 与 `res://user/` 明确不替换；hash 命中但不在这些内置前缀内也不替换。
+- VisualShader 生成代码中的隐藏 sampler alias 属于 baked/generated texture 输入，不会因为 hash 命中而新增可写的 shader parameter key；variant 只复制原 material 可见的参数协议。
+- 通用 `SceneTree.NodeAdded` 路径只检查 CanvasItem 自身的 `Material`；每个命中节点获得独立的 `ShaderMaterial` 副本。Spine 的 material slots 不由这条 CanvasItem 自动路径覆盖，本补丁不改写 slots。
+- 缓存材质不依赖 NodeAdded 猜测：`NCard.Reload` 专门修复卡面 portrait/canvas-group blur，`NMainMenu._Ready` 修复主菜单 blur，`NEpochSlot._Ready` 修复时间线 blur，`NRadialBlurVfx._Ready` 修复径向 blur；`AssetCache.GetMaterial()` 对已知卡面 blur material 路径也返回替换材质的副本。
+- 这些已知动态路径写回的是替代 `ShaderMaterial` 副本，而不是把原始共享材质换成新 shader；当前没有覆盖任意晚到 `CanvasItem.Material` 赋值的通用 helper。若后续集成 owner 暴露专用更新入口，调用方必须沿用这条替代材质路径；本兼容层当前不对不存在的 helper 或自动重写能力作承诺。
+
+古卡（先古卡）遮罩使用的 `res://shaders/blur/canvas_group_mask_blur.gdshader` 明确排除在替换表之外；overlay 不提供、不预加载 `canvas_group_mask_blur` 的移动 variant，因此该遮罩继续使用原版 shader。这个排除不妨碍上面的 `NCard.Reload` 专用路径修复其它卡面 blur 缓存材质。
+
+`TransitionMaterialPatches` 会在 `NTransition._Ready` 后复制场景默认 `ShaderMaterial`，并在原版 `AssetCache.GetMaterial()` 返回 `fade_transition_mat.tres` / `fight_transition_mat.tres` 时返回缓存材质的副本。全局 disposal guard 已阻止 cache cleanup 显式释放资源；该补丁仍作为纵深保护，隔离 transition tween 对共享材质状态的修改并兼容旧兼容包行为。
+
+`v0.107.0-beta`、`v0.107.1`、`v0.108.0`、共享 `v0.109.x` / `v0.110.x` 与独立 `v0.111.0` target 的 `MapDrawingSceneCachePatches` 同样作为资源 owner 纵深保护：它拦截 `NMapDrawings.CreateLineForPlayer()`，让地图画笔绘制/橡皮线条从 Android 兼容层自持有的 `PackedScene` 实例化，避免长期字段依赖已经离开 cache 索引的场景；橡皮线条会同步刷新 `_eraserMaterial`，保留原版保存时通过材质判断 eraser line 的行为。
+
+关闭 `shader_compatibility_mode` 时会退订节点监听并停止后续替换，但已经写入节点或缓存字段的替换材质不会反向恢复为原版；要还原本进程中已替换的材质，必须退出并重启游戏。重启后开关关闭的进程才不会重新应用这些 shader variants。
+
+## 10. 普通用户 MOD 加载
+
+普通 MOD 不由 Android shell 直接注入游戏进程，而是由被 patch 后的原版 `ModManager` 加载。
+
+`ModLoaderPatches` 行为：
+
+- Prefix 替换 `ModManager.Initialize()`，避免 Android 上高风险 IL transpiler；`v0.107.0` 起原方法返回 `Task`，跳过原方法时兼容层会返回 `Task.CompletedTask`，避免 `ExecuteVeryEarly()` `await` 到 `null`。`v0.107.1` 起原版用 `ModManager.State` 取代旧 `_initialized`，兼容层会反射写入 `Initialized`，并继续保留旧字段写入以兼容 `v0.107.0`。`v0.108.0` 保持该路径，并额外处理 `JoinFlow` 构造函数注入 `INetClientGameService`、Spine `SetAnimation()` 返回值移除、`AbstractModel` 构造器改用 `ModelDb.GetByIdOrNull()` 后对两阶段 placeholder 的同 ID 同 type 重复检测，以及原版 `ExecuteEssential()` 新增的 `AssemblyInfo.Init()` / `SavedPropertiesTypeCache.Init()` 启动顺序。`v0.109.0` 延续 Spine/JoinFlow API，并把 `ModelDb.Init` 改为带可选 `Type[]? injectedModelTypes`；v0.109.1 的托管 API 与方法 IL 和 v0.109.0 完全相同，因此复用同一 variant。v0.110.0 继续使用该 ModelDb/Spine/JoinFlow 形状，但把联机版本/MOD 信息移到原版 `PeerVersionInfo`，并把 `ProgressState.TotalUnlocks` 改为 Epoch 派生值，因此使用独立于 v0.109.x 的 target；v0.110.1 只改变未被 compat 引用的 AutoSlay/lobby 实现并复用同一 v0.110.x target：LAN compat 不再 patch 已删除的 `InitialGameInfoMessage.Basic()`，而是让现有 `GetGameplayRelevantModNameList` postfix 自然进入 `PeerVersionInfo.LocalDefault()`；“全部解锁”只在旧版本 property 有 setter 时写 legacy counter，v0.110.0 起由完整 Epoch reveal 状态计算。v0.111.0 保留 ModelDb/ModManager 基本形状，但把联机校验前移到 transport-level `HandshakeManager`，并要求构造 host/client service 时传入 `PeerVersionInfo.LocalDefault()`；Android 不重建握手消息或消息类型表。兼容层通过 Harmony `__args` 兼容旧无参和新签名，正常 null 路径继续 Android two-phase 初始化，显式测试注入集合保留原版行为。版本新增网络消息继续由原版 `MessageTypes` / `ContentSorter` 初始化自动纳入排序，兼容层不维护版本消息清单。
+- 设置原版私有字段 `_settings`、`_fileIo`、`_gameVersion`。
+- 添加 assembly resolve fallback。
+- 为对齐 PC 时序，在用户 MOD 的 Harmony patch 全部应用前不对任何 MOD 模型类型调用 `ModelDb.GetId`/`GetEntry`，也不提前调用完整 `LocManager.Initialize()`。原版模型占位提前到**加载任何 MOD 之前**（`ModLoaderPatches` 触发，原版不带前缀，安全，修复 MOD patch getter / MOD 静态构造引用原版模型的早访问）；每个 MOD initializer 期间只隐藏非原版类型命中早期原版占位的 `ModelDb.Contains(Type)` 结果，避免同名模型误判；如果 MOD 因早期占位误判 ModelDb 已初始化而提前调用 `AbstractModel.InitId()`，兼容层会在 `ModelIdSerializationCache.Init()` 完成前跳过这次调用，等后续 `ModelDb.InitIds()` 统一设置排序 ID，避免提前分配或污染 net ID；MOD 自定义模型占位延迟到 `ModelDb.Init()` 之前的 phase 1，按最终 ID 进行。早期 UI 类型静态构造里的本地化格式化失败由 `EarlyLocalizationFallbackPatches` 临时兜底；direct `PatchProcessor.Patch()` 或 `Harmony.PatchAll()` patch STS2 Godot/UI 类型且可能触发 `.cctor` 时，由 `DeferredModPatchQueue` 只排队危险 target 到 `ExecuteEssential` 初始化完成后重放。合成回归入口为 `port-mod/tools/test-deferred-mod-patch-queue.sh`。
+- 扫描 `AppPaths.ModsDir`。该路径由当前 launch profile 决定：
+
+```text
+# mods_mode=global
+<files>/mods
+
+# mods_mode=isolated
+<files>/instances/<profile_id>/mods
+```
+
+- 跳过 `ReadSteamMods()`，不枚举 Steam Workshop。Steam 登录、游戏 depot 下载、Steam Cloud 与 WebDAV 存档同步均在 Android launcher 侧完成，不恢复桌面 Steamworks 到游戏进程内。
+- 递归读取本地 MOD manifest，调用游戏原本的私有 scanner、dependency sort、TryLoadMod。
+- 对 `mod_manifest.json` 自动生成 `<ModId>.json` alias，以兼容当前 PC scanner 期望。
+- 将 companion settings 中的启用/禁用状态投影回运行时 `ModSettings`。
+
+## 11. 关闭兼容包开关时
+
+如果用户在附加设置中关闭 Android compat pack：
+
+- 启动前不会强制要求 selected compat pack。
+- publish 目录中的 `STS2Mobile.dll` 会被删除。
+- `<files>/port_compat.pck` 会被删除。
+- 游戏可能以更接近原版 PC 行为启动，但 Android 必需 patch 缺失，崩溃/黑屏/输入异常风险很高。
+
+此模式主要用于诊断，不应作为普通推荐路径。
+
+## 12. 诊断入口
+
+常用日志/检查：
+
+```bash
+adb logcat | grep -E 'Sts2|STS2Mobile|GODOT'
+adb shell run-as com.megacrit.sts2re ls files/compat-packs
+adb shell run-as com.megacrit.sts2re cat files/launcher/selected_compat_pack.json
+adb shell run-as com.megacrit.sts2re cat files/launcher/offline-bootstrap-probe.json
+adb shell run-as com.megacrit.sts2re ls files/.godot/mono/publish/arm64
+adb shell run-as com.megacrit.sts2re cat files/logs/android-launch.log
+adb shell run-as com.megacrit.sts2re cat files/logs/sts2.log
+```
+
+关键日志关键词：
+
+- `Selected compatibility pack for launch`
+- `Prepared compat entry dll`
+- `Prepared compat overlay`
+- `STS2Mobile Android port compatibility`
+- `Critical platform patches applied`
+- `Critical save path patches applied`
+- `CompatBuildInfo`
+- `Loading imported game PCK`
+- `Shader compatibility overlay pack load`
+- `[Mods] Android mod initialization loaded`

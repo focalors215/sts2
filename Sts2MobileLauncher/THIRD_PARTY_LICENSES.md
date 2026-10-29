@@ -1,0 +1,79 @@
+# 第三方来源与许可证说明
+
+本文件是仓库级别的第三方来源/许可证摘要，便于维护和发布前审计；它不是法律意见。仓库不包含《Slay the Spire 2》商业游戏本体、用户 payload、完整 Godot/Mono runtime 或签名密钥。
+
+## 项目 LICENSE 建议
+
+建议本仓库**原创代码**采用 **MIT License**（已在 [`LICENSE`](LICENSE) 中添加）。理由：
+
+- 直接参考的 `StS2-Launcher_Mod_Manager` 使用 MIT；Godot Android template 也是 MIT。
+- 当前 Gradle/.NET 依赖大多为 MIT、Apache-2.0、BSD 系列等宽松许可证，MIT 与其兼容性较好。
+- MIT 不会把本仓库没有权利再授权的内容一并改许可证；第三方源码、模板、二进制 runtime、FMOD、Steam/NexusMods 服务 API、用户游戏文件等仍遵循各自许可证/服务条款。
+
+注意：`SlayTheAmethystModded` 仓库截至本次整理未暴露标准 SPDX 顶层 `LICENSE`，但带有 `NOTICE` / `THIRD_PARTY_LICENSES.md`。`WorkshopAndroidDownloader` 仓库截至本次整理也未检测到标准顶层 `LICENSE`。本仓库中从这些项目改编/参考的 Steam 协议、SteamPipe 与 Workshop 下载实现应继续保留出处说明；公开分发前建议向上游确认可再分发许可或保留单独授权记录。
+
+## 直接引用资源 / 参考代码实现的仓库
+
+| 名称 | URL | 本仓库用途 | 上游许可/注意事项 |
+| --- | --- | --- | --- |
+| SlayTheAmethystModded | <https://github.com/ModinMobileSTS/SlayTheAmethystModded> | Steam 登录、SteamPipe 下载、Steam Cloud 相关实现与设计参考；`android/steam-protocol/`、`android/steam-content/` 的协议/下载代码从该项目思路与源码改编。默认关闭的鼠标悬浮按钮参考其圆形、拖动、闲置淡出及左右键指示设计；本仓库三态输入逻辑和 Canvas 图标独立实现，未复制该按钮源码或图标资源。 | 顶层许可未检测到标准 SPDX；上游包含 `NOTICE` 与第三方许可证摘要。保留署名，发布前确认改编源码授权。 |
+| WorkshopAndroidDownloader | <https://github.com/Apricityx/WorkshopAndroidDownloader> | Android Steam Workshop 浏览、下载、UGC manifest/chunk 下载与已下载条目更新记录流程参考；本仓库新增的 Workshop 页面、`SteamPublishedFileClient` 与 `android/steam-content/.../workshop/` 相关实现参考/裁剪自该项目。 | 顶层许可未检测到标准 SPDX。保留署名，发布前确认改编源码授权。 |
+| 尖塔补给站 / Spire Supply Station（apricityx） | <https://workshop.apricityx.top> | 默认关闭的第三方匿名 Workshop 下载源；原生 HTTP 客户端参考公开下载协议获取 descriptor / CDN token，再复用已有下载器。不打包站点页面、油猴脚本或浏览器扩展。 | API 可公开访问不等于授予站点代码再分发许可或第三方接入授权。正式发布前应与维护者确认调用许可及频率限制；遵守站点用户协议、Steam 条款和 MOD 作者许可，保留署名，不绕过限流或内容下架。 |
+| StS2-Launcher_Mod_Manager | <https://github.com/iunius612/StS2-Launcher_Mod_Manager> | Android launcher/runtime、Godot/Mono publish 目录、兼容补丁加载顺序与构建脚本的参考来源；`.env` 可指向本地准备的 runtime/template 产物。 | MIT License。运行时二进制产物不提交到本仓库，随本地配置同步/构建。 |
+| sts2-android-compat | <https://github.com/ModinMobileSTS/sts2-android-compat> | `port-mod/` submodule：Android 兼容补丁源码，按游戏版本分支构建 `STS2Mobile.dll` 与 `port_compat.pck`。 | 独立仓库；以其自身许可证/提交历史为准。 |
+| godot-debug-menu | <https://github.com/godot-extended-libraries/godot-debug-menu> | `port-mod/overlay/addons/debug_menu/` 打包该 Godot 4.x debug menu add-on，作为设置页可选的游戏内性能 overlay，显示 FPS、帧时间、CPU/GPU frame graph 和硬件/渲染器信息。 | MIT License；保留上游 `LICENSE.md`。 |
+
+## 直接资源、模板与本地同步产物
+
+| 组件 | 本仓库位置/用途 | 许可证/注意事项 |
+| --- | --- | --- |
+| Godot Engine Android template | `android/` Gradle template 结构、`GodotApp.java` 等；构建时同步 Godot Android AAR / GodotSharp / Mono publish runtime 到 gitignored 路径。 | MIT。保留 Godot 文件头；完整 runtime 不入库。 |
+| Godot.NET.Sdk 4.5.1（仅原生回归） | `port-mod/tests/FramePreparation.Tests` 用官方 Godot .NET SDK 编译合成测试场景，配合官方桌面引擎验证真实 ResourceLoader/节点生命周期；不改变发布 APK 的依赖。 | MIT；<https://github.com/godotengine/godot>。测试引擎下载与生成产物仅保留在 ignored 路径，不提交。 |
+| Electron / electron-builder | `windows/` Windows 启动器运行时与打包工具（npm devDependencies，打包时 Electron 运行时进入 `dist/windows/` 产物）。 | MIT；Electron 包含 Chromium 等组件，其 `LICENSES.chromium.html` 随打包产物分发。 |
+| yauzl / yazl | `windows/` 启动器读取 MOD ZIP、写入存档快照 ZIP。 | MIT。 |
+| Material Symbols Rounded | `android/res/font/material_symbols_rounded.ttf` 作为离线生成输入；`tools/android/generate-material-symbol-vectors.py` 从字体导出 `android/res/drawable/ic_ms_*.xml` 官方轮廓 vector，Java 侧 `MaterialSymbols` 运行时加载这些 vector 统一启动器 MD3 图标；Windows 启动器打包时直接内嵌该字体用于图标。 | Google Fonts / Material Symbols，Apache-2.0；生成的 vector 资源仍按该来源审计。 |
+| FMOD Android engine + Godot plugin | 通过 `.env` 的 `STS2_FMOD_PLUGIN_AAR` 和同级 `arm64/`（或 `STS2_FMOD_ANDROID_LIBS_DIR`）同步与 PC 引擎版本一致的 2.03.06 FMOD core/Studio 和 Godot 原生桥到 gitignored 的 `android/libs/`，只在 APK 中打包；同步前检查三件套 SHA。 | FMOD 自身许可及 Godot 插件上游许可分别适用；本仓库不提交 AAR/原生库，正式分发前仍须确认再分发授权。 |
+| .NET / Godot Mono runtime 与 crypto native jar | 通过 `.env` / `tools/android/sync-runtime-from-references.sh` 同步到 `android/assets/dotnet_bcl/` 等 gitignored 路径。 | .NET / Godot / 上游组件各自许可证；发布包前审计实际打入 APK 的文件。 |
+| Android compatibility pack zips | 构建时生成到 `android/assets/compat_packs/*.zip`，APK 打包阶段作为 assets 安装源。 | 生成产物不再由 git 跟踪；从 `port-mod` 分支源码重新构建。 |
+
+实验性 `MONO_MEMORY_STATS_FIX=1` 使用 `tools/android/patch-mono-memory-stats.py` 对现有 Ekyso 定制 ARM64 `libmonosgen-2.0.so` 的总量查询做单指令修改，不提交或另行下载该二进制。实现依据 [.NET 9.0.7 Mono 内存查询源码](https://github.com/dotnet/runtime/blob/v9.0.7/src/mono/mono/utils/memfuncs.c)（MIT）及当前库的只读指令分析；定制库来源为 [Ekyso/StS2-Launcher](https://github.com/Ekyso/StS2-Launcher)。未获得匹配定制库的完整源码/构建配置，不能宣称为源码可复现构建；发布前仍需审计实际二进制及其上游 notices。前后 SHA、实验范围及恢复方式见 [构建说明](doc/build/building-and-packaging.md#41-实验性-mono-内存总量修复默认关闭)。本地一次性指令验证使用 Unicorn 2.1.4（<https://github.com/unicorn-engine/unicorn>，GPL-2.0），仅在 ignored 验证环境使用，不随 APK 或仓库分发；正式修复脚本与安全回归只依赖 Python 标准库。
+
+默认启用的 `tools/android/patch-monomod-corlib.py` 依据 [Ekyso/Harmony 的 MonoMod `Extensions.SetMonoCorlibInternal`](https://github.com/Ekyso/Harmony/blob/main/LocalMonoMod/src/MonoMod.Utils/Extensions.cs)（MIT）及当前已核对的托管 IL / 原生访问检查入口，只移除 staged `MonoMod.Utils.dll` 中旧 Mono 布局的原生写入，保留程序集解析缓存。不提交第三方 DLL，不重建或修改 native Mono，也不新增 APK 依赖；脚本只依赖 Python 标准库，托管回归复用本机现有 Harmony/MonoMod/Cecil。发布前仍须保留这些既有组件的 notices 并审计实际输出，不能将此修复宣称为上游完整源码重建。输入/输出 SHA、配套原生库限制及测试边界见 [构建说明](doc/build/building-and-packaging.md#42-monomod-原生布局安全修复默认启用)。
+
+## 主要 Gradle / JVM 依赖
+
+| 依赖 | 用途 | 上游许可证 |
+| --- | --- | --- |
+| AndroidX Fragment / RecyclerView / DocumentFile / Core SplashScreen / Security Crypto | Android UI、文件访问、加密 SharedPreferences。 | Apache-2.0 |
+| Material Components for Android | Material 3 UI 组件。 | Apache-2.0 |
+| CustomActivityOnCrash (`cat.ereza:customactivityoncrash`) | 崩溃页入口。 | Apache-2.0 |
+| OkHttp / Okio / MockWebServer | Steam CM WebSocket、HTTP/CDN 请求、NexusMods 请求，以及不打入 APK 的 Steam CDN 重定向回归测试。 | Apache-2.0 |
+| Protocol Buffers / protobuf Gradle plugin | Steam protobuf 消息编解码与生成。 | BSD-3-Clause |
+| Kotlin stdlib / coroutines / serialization | Steam 协议与下载子模块。 | Apache-2.0 |
+| Kotlin Test / JUnit 4 | Steam 子模块与 `android/test` 的 JVM 回归；不打入发布 APK。 | Apache-2.0 / Eclipse Public License 1.0 |
+| Robolectric (`org.robolectric:robolectric:4.15.1`) | 启动器云同步决策、本地快照和 MOD 导入文件安全回归；仅测试使用，不打入 APK。 | MIT；<https://github.com/robolectric/robolectric> |
+| Android desugar_jdk_libs | 为 Android 7.x 等旧系统补齐 `java.time` 等 Java 8+ library API；随 APK 构建。 | GPL-2.0 with Classpath Exception |
+| JavaSteam (`in.dragonbra:javasteam`) | Steam 账号、CM、RemoteStorage 等协议支持。 | MIT |
+| Bouncy Castle (`bcprov-jdk18on`) | JavaSteam 加密支持。 | Bouncy Castle License / MIT-style |
+| SLF4J NOP | 日志 facade no-op backend。 | MIT |
+| XZ for Java | Steam VZip/LZMA chunk 解压。 | Public Domain / 0BSD-style upstream notice |
+| zstd Android Prefab (`com.fpliu.ndk.pkg.prefab.android.21:zstd`) | Steam VZstd depot chunk JNI/native 解压。 | zstd upstream BSD-3-Clause / package metadata |
+| MTDataFilesProvider (`com.github.L-JINBIN:MTDataFilesProvider`) | debug/dev/release 文件访问 provider 依赖。 | 上游未检测到标准 license；发布前应单独确认。 |
+
+## 可选参考 MOD / 排查仓库
+
+这些仓库仅用于 MOD 兼容性排查或文档参考，不应把其源码/构建产物提交到本仓库：
+
+| 名称 | URL | 用途 | 许可证/注意事项 |
+| --- | --- | --- | --- |
+| STS2-RitsuLib | <https://github.com/BAKAOLC/STS2-RitsuLib> | 常见前置 MOD 兼容性排查。 | MIT |
+| BaseLib-StS2 | <https://github.com/Alchyr/BaseLib-StS2> | 常见前置 MOD 兼容性排查。 | MIT |
+| sts2-quickRestart | <https://github.com/freude916/sts2-quickRestart> | 快速重开 UI/流程兼容性参考。 | 未检测到标准 license；仅作本地参考。 |
+
+## 发布前合规检查
+
+1. 确认 APK 不包含用户游戏 zip、解包后的商业 payload、original/reference DLL、keystore 或账号/token。
+2. 重新生成并审计 `android/assets/compat_packs/*.zip`，不要把 zip 产物加入 git。
+3. 对实际打入 APK 的 Godot/.NET/FMOD/native runtime 与 Gradle 依赖导出完整 license/notice 清单。
+4. 对 `SlayTheAmethystModded`、`WorkshopAndroidDownloader` 改编代码和无标准 license 的依赖保留授权依据或替换为自研/明确许可实现。
+5. README、`doc/` 与本文件需同步记录新增第三方来源。

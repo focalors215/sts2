@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Theme: Meow Zero &amp; Little Fish's Cottage (shared with the iPad launcher). -->
+    <string name="cottage_theme_name">Meow Zero &amp; Little Fish\'s Cottage</string>
+    <string name="cottage_nav_home">Cottage</string>
+    <string name="cottage_nav_dashboard">Game</string>
+    <string name="cottage_nav_mods">Local Mods</string>
+    <string name="cottage_nav_versions">Versions</string>
+    <string name="cottage_nav_settings">Settings</string>
+    <string name="cottage_nav_about">About</string>
+    <string name="cottage_tab_home">Cottage</string>
+    <string name="cottage_tab_mods">Mods</string>
+    <string name="cottage_tab_versions">Versions</string>
+    <string name="cottage_tab_settings">Settings</string>
+    <string name="cottage_tab_about">About</string>
+    <string-array name="cottage_hotspot_labels">
+        <item>Saves</item>
+        <item>Local mods</item>
+        <item>Multiplayer</item>
+        <item>Settings</item>
+        <item>Start game</item>
+    </string-array>
+    <string name="cottage_postcard_description">Meow Zero and Little Fish reading under a blanket</string>
+    <string name="cottage_hero_subtitle">Slay the Spire 2 · Let\'s climb the spire together today</string>
+    <string name="cottage_start_game">Come on in</string>
+    <string name="cottage_status_missing_payload">Game files not imported yet. Tap here to import.</string>
+    <string name="cottage_tagline_dashboard">Today we climb together</string>
+    <string name="cottage_tagline_mods">Something new for the cottage</string>
+    <string name="cottage_tagline_versions">Tidy up the cottage bookshelf</string>
+    <string name="cottage_tagline_settings">A cozy corner of the cottage</string>
+    <string name="cottage_tagline_about">About this little cottage</string>
+</resources>

@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 主题：喵喵零和小鱼的小屋（夜间小屋配色，与 CottageTheme 保持一致）。 -->
+    <style name="Theme.Sts2ExtraSettings" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">#FFC76B</item>
+        <item name="colorOnPrimary">#1B2540</item>
+        <item name="colorPrimaryContainer">#2C3A63</item>
+        <item name="colorOnPrimaryContainer">#FFF1D6</item>
+        <item name="colorSecondary">#7FB7FF</item>
+        <item name="colorOnSecondary">#1B2540</item>
+        <item name="colorSecondaryContainer">#24304F</item>
+        <item name="colorOnSecondaryContainer">#FFF1D6</item>
+        <item name="colorSurface">#1B2540</item>
+        <item name="colorSurfaceContainerHigh">#1B2540</item>
+        <item name="colorSurfaceContainerHighest">#24304F</item>
+        <item name="colorSurfaceVariant">#2C3A63</item>
+        <item name="colorOnSurface">#FFF1D6</item>
+        <item name="colorOnSurfaceVariant">#B9C2DA</item>
+        <item name="colorOutline">#3A476B</item>
+        <item name="colorError">#FFB4AB</item>
+        <item name="colorOnError">#690005</item>
+        <item name="android:statusBarColor">#121A33</item>
+        <item name="android:navigationBarColor">#121A33</item>
+        <item name="android:windowBackground">#121A33</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <style name="Theme.Sts2Crash" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/sts2_crash_primary</item>
+        <item name="colorOnPrimary">@color/sts2_crash_on_primary</item>
+        <item name="colorPrimaryContainer">@color/sts2_crash_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/sts2_crash_on_primary_container</item>
+        <item name="colorSecondary">@color/sts2_crash_secondary</item>
+        <item name="colorOnSecondary">@color/sts2_crash_on_secondary</item>
+        <item name="colorSecondaryContainer">@color/sts2_crash_secondary_container</item>
+        <item name="colorOnSecondaryContainer">@color/sts2_crash_on_secondary_container</item>
+        <item name="colorTertiary">@color/sts2_crash_tertiary</item>
+        <item name="colorOnTertiary">@color/sts2_crash_on_tertiary</item>
+        <item name="colorTertiaryContainer">@color/sts2_crash_tertiary_container</item>
+        <item name="colorOnTertiaryContainer">@color/sts2_crash_on_tertiary_container</item>
+        <item name="colorError">@color/sts2_crash_error</item>
+        <item name="colorOnError">@color/sts2_crash_on_error</item>
+        <item name="colorErrorContainer">@color/sts2_crash_error_container</item>
+        <item name="colorOnErrorContainer">@color/sts2_crash_on_error_container</item>
+        <item name="colorSurface">@color/sts2_crash_surface</item>
+        <item name="colorSurfaceVariant">@color/sts2_crash_surface_variant</item>
+        <item name="colorOnSurface">@color/sts2_crash_on_surface</item>
+        <item name="colorOnSurfaceVariant">@color/sts2_crash_on_surface_variant</item>
+        <item name="colorOutline">@color/sts2_crash_outline</item>
+        <item name="android:statusBarColor">@color/sts2_crash_surface</item>
+        <item name="android:navigationBarColor">@color/sts2_crash_background</item>
+        <item name="android:windowBackground">@color/sts2_crash_background</item>
+    </style>
+
+    <style name="Theme.Sts2Tools" parent="Theme.Sts2Crash">
+        <item name="colorAccent">@color/sts2_crash_primary</item>
+        <item name="android:colorAccent">@color/sts2_crash_primary</item>
+        <item name="colorControlNormal">@color/sts2_crash_on_surface_variant</item>
+        <item name="colorControlActivated">@color/sts2_crash_primary</item>
+        <item name="colorControlHighlight">#24B7C4FF</item>
+        <item name="android:colorControlHighlight">#24B7C4FF</item>
+        <item name="android:textColorPrimary">@color/sts2_crash_on_surface</item>
+        <item name="android:textColorSecondary">@color/sts2_crash_on_surface_variant</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="bottomSheetDialogTheme">@style/ThemeOverlay.Sts2Tools.BottomSheet</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.Sts2Tools.Dialog</item>
+        <item name="toolbarStyle">@style/Widget.Sts2Tools.Toolbar</item>
+    </style>
+
+    <style name="ThemeOverlay.Sts2Tools.BottomSheet" parent="ThemeOverlay.Material3.BottomSheetDialog">
+        <item name="colorPrimary">@color/sts2_crash_primary</item>
+        <item name="colorSurface">@color/sts2_crash_surface_container</item>
+        <item name="colorOnSurface">@color/sts2_crash_on_surface</item>
+        <item name="colorControlHighlight">#24B7C4FF</item>
+        <item name="android:colorAccent">@color/sts2_crash_primary</item>
+    </style>
+
+    <style name="ThemeOverlay.Sts2Tools.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorPrimary">@color/sts2_crash_primary</item>
+        <item name="colorSurface">@color/sts2_crash_surface_container</item>
+        <item name="colorOnSurface">@color/sts2_crash_on_surface</item>
+    </style>
+
+    <style name="Widget.Sts2Tools.Toolbar" parent="Widget.Material3.Toolbar">
+        <item name="android:background">@color/sts2_crash_surface</item>
+        <item name="titleTextAppearance">@style/TextAppearance.Material3.TitleLarge</item>
+        <item name="subtitleTextAppearance">@style/TextAppearance.Material3.BodyMedium</item>
+        <item name="titleTextColor">@color/sts2_crash_on_surface</item>
+        <item name="subtitleTextColor">@color/sts2_crash_on_surface_variant</item>
+    </style>
+
+    <style name="Widget.Sts2Tools.Action" parent="Widget.Material3.Button.TextButton">
+        <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">64dp</item>
+        <item name="android:paddingLeft">4dp</item>
+        <item name="android:paddingRight">4dp</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textColor">@color/sts2_tools_action</item>
+        <item name="iconTint">@color/sts2_tools_action</item>
+        <item name="iconGravity">textTop</item>
+        <item name="iconSize">24dp</item>
+        <item name="iconPadding">4dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="rippleColor">#24B7C4FF</item>
+    </style>
+
+    <style name="Widget.Sts2Crash.Card" parent="Widget.MaterialComponents.CardView">
+        <item name="cardBackgroundColor">@color/sts2_crash_surface_container</item>
+        <item name="strokeColor">@color/sts2_crash_outline</item>
+        <item name="strokeWidth">1dp</item>
+        <item name="cardCornerRadius">24dp</item>
+    </style>
+</resources>

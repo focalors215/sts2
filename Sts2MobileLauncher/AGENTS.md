@@ -1,0 +1,756 @@
+# AGENTS.md
+
+面向后续编码代理/维护者的项目速览与操作约定。当前目录为本仓库根目录。
+最后同步：2026-08-23。
+
+## 0. 总原则
+
+- 本工程是 **Slay the Spire 2 Android 重构移植/启动器工程**，不是完整游戏源码仓库。
+- 仓库只维护 Android shell、导入/版本管理逻辑、兼容包构建脚本、Android 兼容补丁源码与通用离线启动层源码；**不提交用户游戏 zip、解压后的完整游戏 payload、大型 Godot/Mono runtime、keystore**。
+- `port-mod/` 是独立仓库 <https://github.com/ModinMobileSTS/sts2-android-compat> 的 **git submodule**。当前开发默认使用 flat matrix 模式：一个 checkout 读取 `port-mod/targets/active/*/target.json`，为多个目标版本构建 schema 2 family full compat 包；按游戏版本分支构建的 legacy 模式只作为显式回退/诊断路径保留。
+- `offline-bootstrap/` 是独立边界的通用离线启动层目录：不读取 `port-mod/targets`、不接受 `ReferenceFlavor`、不静态引用 `sts2.dll`、不含 `STS2_TARGET_*` 分支；它输出 schema 2 `sts2-android-offline-bootstrap.zip`，仅在没有已安装 full compat 包按 payload SHA/version 命中时自动作为最低优先级 fallback。wildcard 不是未来版本兼容认证：运行时按 API 形状解析已知合约，未知语义 fail closed；probe v2 只有真实 ModelDb two-phase 完成后才标记 `ready`，已知终态失败的相同 pack id/target/compat version/source zip SHA/payload SHA tuple 不再自动匹配。
+- 新增或修改功能时必须同步文档：用户可见/长期维护说明优先更新 `README.md` / `doc/`；变更流水/changelog 只写入 `.agent/agent-docs/changelog/`（不提交），因为它主要服务 agent 接力，不作为公开仓库文档。历史 `docs/` 已移到 `.agent/historical-backup/docs/` 本地备份，不再作为公开文档入口。`AGENTS.md` 是 agent/维护者专用操作约定；本地 agent 草稿、报告、worktree、参考 clone、历史备份与 agent 文档放入 `.agent/`，该目录不追踪。
+- 完成用户要求的修改后，请用脚本构建一个 importer 版本 APK 便于测试：
+
+```bash
+tools/package/build_importer_apk.sh
+```
+
+- 寻找原版代码和其他关键参考内容时，请从全局配置里读取信息： .env 和 local.properties
+
+## 1. 项目定位
+
+Android 侧拆成三层维护：
+
+1. **Android shell / launcher / 附加设置**
+   - APK 默认进入 `GameSettingsActivity`，不是直接进入游戏。
+   - 负责首次向导、本地 PC 游戏 zip 导入、Steam 登录/游戏下载、本地存档快照、Steam Cloud 与 WebDAV 云存档、私有目录管理、游戏版本/兼容包管理、启动 Godot Activity、日志/文件浏览、存档备份、MOD 管理。
+2. **原版游戏 payload**
+   - 用户本地提供 `SlayTheSpire2.zip`，或使用自己拥有 STS2 的 Steam 账号从 SteamPipe 下载。
+   - 导入/下载后安装到 `<files>/payloads/<payload_id>/game/`；版本/配置切换只切换 launch profile 指针，不再复制完整 PCK/解压目录。
+   - “版本”页可为同一个 payload 创建多个 `<files>/instances/<profile_id>/instance.json` 启动配置，并分别选择兼容包、存档/设置、MOD 使用全局目录或隔离目录；删除游戏本体或兼容包不会删除启动配置，启动时再提示缺失项。
+   - 直装版构建时可临时内置 zip 到 APK assets，但构建脚本退出会清理，不能提交。
+3. **Android 兼容包 / Harmony patcher**
+   - `port-mod/STS2AndroidPortCompat` 编译输出 full compat `STS2Mobile.dll`。
+   - `port-mod/overlay` 打包输出 full compat `port_compat.pck`。
+   - legacy schema 1 兼容包 zip 形态为：`compat_manifest.json` + `STS2Mobile.dll` + `port_compat.pck` + `SHA256SUMS`。
+   - flat schema 2 family 包 zip 形态为：`compat_manifest.json` + `variants/<target_id>/STS2Mobile.dll` + `variants/<target_id>/port_compat.pck` + `SHA256SUMS`；启动配置用 `compat_pack_id` + `compat_target_id` 指向具体 variant。
+   - 兼容包不是普通用户 MOD；它由 launcher/Godot runtime 在游戏早期加载，用来 patch 原版 PC 程序集并让普通 MOD 系统在 Android 上工作。
+4. **Windows 启动器（`windows/`）**
+   - Electron 应用，与 Android / iPad 共用「喵喵零和小鱼的小屋」前端（插画热区、配色、描边标题、吉祥物与 Android `CottageTheme` / `CottageHomeStage` 同坐标，见 `doc/architecture/launcher-theme.md`）。
+   - Windows 直接运行 PC 原版，不使用兼容包/payload store；启动配置 = 游戏目录（Steam 库自动检测或手动），MOD 在 `<游戏目录>/mods/`，开关写当前存档账号 `settings.save` 的 `mod_settings`（与 Android 同一协议），存档默认 `%APPDATA%\SlayTheSpire2`，快照放启动器 userData。
+   - 插画/字体/图标只在 `android/res/`、`doc/images/` 保留一份，`windows/scripts/prepare-assets.js` 复制到 ignored 的 `windows/assets/generated/`；改主题时三端同步。
+   - 构建：`tools/package/build_windows_launcher.sh`（Linux 出便携 zip，Windows/Wine 另出 NSIS 安装包；CI 为 `.github/workflows/windows-launcher.yml`），后端测试 `cd windows && npm test`。
+5. **通用离线启动层 / offline bootstrap**
+   - `offline-bootstrap/src/STS2OfflineBootstrap` 编译输出同名 `STS2Mobile.dll`，只为复用 patched runtime 入口 ABI；`ModelDbRuntimeContract` 按 API 形状解析无参 `ModelDb.Init()` 与默认 null `Init(Type[]?)`，显式注入集合保留原版路径，未知参数/返回语义拒绝接管。
+   - `offline-bootstrap/overlay` 打包输出最小有效 `port_compat.pck`，默认不替换游戏资源。
+   - schema 2 zip 形态为：`compat_manifest.json` + `variants/offline-any/STS2Mobile.dll` + `variants/offline-any/port_compat.pck` + `SHA256SUMS`，manifest 必须声明 `pack_kind=offline-bootstrap`、`match_mode=offline-wildcard`、`versions=["*"]`；当前 `compat_version=0.2.0-dev`、`probe_contract=offline-bootstrap-v2`。
+   - Java 安装校验只允许这种受限 offline 包使用 `*`；普通 schema 1/full compat 包出现版本或 SHA 通配符应拒绝安装。probe v2 的终态失败会阻止同一 tuple 再次自动推荐，但用户手工绑定的 profile 仍可在失败详情对话框中显式重试。
+
+## 2. 当前支持版本矩阵
+
+`port-mod` 当前默认跟踪 `main`，并采用 flat matrix 打包模式：不按游戏版本切开发分支，而是从当前 checkout 的 `targets/active/*/target.json` 循环编译多个 target，并输出一个 schema 2 family 包。`compat/*` 分支只作为 legacy 发布包对照、回退诊断或历史维护入口；legacy 打包模式会通过临时 worktree 同时构建多个 schema 1 内置兼容包，仅在显式设置 `COMPAT_PACK_BUILD_MODE=legacy` 时使用。
+
+| 通道 | 游戏版本 | Steam 分支 | 原版/解包引用配置 | legacy submodule 分支 | compile gate `ReferenceFlavor` | flat target id | legacy 兼容包 id |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 正式/稳定 | `v0.103.2` / `v0.103.3` | `public` | `.env`: `STS2_ORIGINAL_V103_REFERENCE_DIR` 或 `STS2_ORIGINAL_V103_ROOT` | `compat/v0.103.2` | `original` | `v0.103.x` | `sts2-android-compat-v0.103.x` |
+| Beta 旧测试 | `v0.106.1` | `public-beta` | `.env`: `STS2_ORIGINAL_V1061_REFERENCE_DIR` 或 `STS2_ORIGINAL_V1061_ROOT` | `compat/v0.106.1-beta` | `original-v0.106.1` | `v0.106.1-beta` | `sts2-android-compat-v0.106.1-beta` |
+| Beta 旧测试 | `v0.107.0` | `public-beta` | `.env`: `STS2_ORIGINAL_V1070_REFERENCE_DIR` 或 `STS2_ORIGINAL_V1070_ROOT` | `compat/v0.107.0-beta` | `original-v0.107.0` | `v0.107.0-beta` | `sts2-android-compat-v0.107.0-beta` |
+| 正式/稳定 | `v0.107.1` | `public` | `.env`: `STS2_ORIGINAL_V1071_REFERENCE_DIR` 或 `STS2_ORIGINAL_V1071_ROOT` | — | `original-v0.107.1` | `v0.107.1` | — |
+| 正式/稳定 | `v0.108.0` | `public-beta` | `.env`: `STS2_ORIGINAL_V1080_REFERENCE_DIR` 或 `STS2_ORIGINAL_V1080_ROOT` | — | `original-v0.108.0` | `v0.108.0` | — |
+| Beta 旧测试 | `v0.109.0` / `v0.109.1` | `public-beta` | `.env`: `STS2_ORIGINAL_V1090_REFERENCE_DIR` 或 `STS2_ORIGINAL_V1090_ROOT`（历史变量名，指向最新 v0.109.1 引用） | — | `original-v0.109.0` | `v0.109.0`（稳定 id，显示为 v0.109.x） | — |
+| Beta 旧测试 | `v0.110.0` / `v0.110.1` | `public-beta` | `.env`: `STS2_ORIGINAL_V1100_REFERENCE_DIR` 或 `STS2_ORIGINAL_V1100_ROOT`（历史变量名，指向 v0.110.1） | — | `original-v0.110.0` | `v0.110.0`（显示 v0.110.x） | — |
+| Beta 当前测试 | `v0.111.0` | `public-beta` | `.env`: `STS2_ORIGINAL_V1110_REFERENCE_DIR` 或 `STS2_ORIGINAL_V1110_ROOT` | — | `original-v0.111.0` | `v0.111.0` | — |
+
+关键文件：
+
+- `.gitmodules`：`port-mod` submodule GitHub URL 与默认 branch（`main`）。
+- `tools/android/bundled-compat-packs.json`：legacy 内置兼容包列表，当前包含 `compat/v0.103.2`、`compat/v0.106.1-beta` 与 `compat/v0.107.0-beta`。
+- `port-mod/targets/active/*/target.json`：flat matrix target 描述，记录 target id、支持版本、Steam 分支 `steam_branch`、`ReferenceFlavor`、compile constants、原版引用来源与一个或多个 dll sha；`v0.109.0` target id 为兼容既有 profile 保持不变，但同一 variant 支持 v0.109.0/v0.109.1 并显示为 v0.109.x；v0.110.0 因输入、联机协议、存档与玩法 API 变化使用独立 `v0.110.0` target，v0.110.1 与其托管 API/compat IL 等价，因此共享该 target；v0.111.0 因 transport-level handshake、service 构造参数和动画状态图变化使用新的独立 target。
+- `port-mod/tools/build-compat-matrix.sh`：从当前 checkout 构建 schema 2 family full compat 包；`tools/android/stage-bundled-compat-packs.sh` 默认会调用它。
+- `port-mod/tools/test-deferred-mod-patch-queue.sh`：用不含商业代码的合成 `sts2` fixture 回归用户 MOD `Harmony.PatchAll()` 逐目标延迟，覆盖危险 UI `.cctor`、同 PatchAll class 的安全模型 target、prepare/cleanup、失败隔离与 direct `PatchProcessor.Patch()` 路径。
+- `port-mod/tools/test-harmony-method-reference-importer.sh`：用实际打包 Harmony/MonoMod 与合成 `sts2` fixture 回归 method required/optional custom modifier 修复，覆盖 direct importer、独立 Cecil emitter fallback、class/struct、closed generic、parameter modifier 与可执行 setter 调用。
+- `port-mod/tools/test-modeldb-shadow-placeholder.sh`：用本机 original `sts2.dll` 与兼容层运行 shadow placeholder 合成回归，确认 MOD 初始化窗口不写 canonical ModelDb、vanilla generic lookup 可读取 shadow，phase 1 才发布。
+- `port-mod/tools/test-extended-multiplayer-rooms.sh`：用不含商业代码的最小 Godot/STS2 API shape 回归超过四人的宝箱 holder/焦点/手势与休息点角色容器扩容，覆盖 5 人和较大网格路径。
+- `offline-bootstrap/tools/test-offline-contract.sh`：运行合成 API 形状测试，并对本机已配置的所有已配置 original `sts2.dll` 做只读反射契约检查；不静态引用游戏程序集。
+- `offline-bootstrap/tools/build-offline-pack.sh`：先运行上述契约检查，再构建 schema 2 通用离线启动层包 `sts2-android-offline-bootstrap.zip`。
+- `tools/android/stage-bundled-compat-artifacts.sh`：APK 打包默认入口，一次清理 `android/assets/compat_packs/*.zip` 后 stage full compat family 包和 offline bootstrap 包。
+- `.env.example`：工具链、runtime 参考、original compile gate 引用、签名环境变量示例；复制为 `.env` 后编辑，本文件不入 git。
+- `local.properties.example`：非环境变量的本地构建选项示例；复制为 `local.properties` 后编辑，本文件不入 git。
+- `tools/env/load-local-config.sh`：所有 bash 构建脚本共用的 `.env` / `local.properties` loader。
+- `port-mod/refs/original*/`：仅保留 README 占位；构建脚本不再依赖提交到仓库的个人 symlink。
+- `port-mod/compat_manifest.*.json`：legacy schema 1 兼容包 manifest，主要供旧发布包或诊断包使用；默认 matrix 包以 `targets/active/*/target.json` 生成 schema 2 manifest。
+
+注意：启动器按 payload manifest 的 `sts2_dll_sha256` 与 `release_info.version` 为新建启动配置自动推荐/填写兼容包；schema 1 优先匹配 `target_game.version`，也支持 manifest 中的 `target_game.supported_versions` / `compatible_versions` / `versions` 列表；schema 2 会展开 `targets[]`。`sts2_dll_sha256` 可为兼容旧包的单字符串，也可为同一 API-compatible variant 的 SHA 数组，精确匹配会检查数组全部元素；版本页与 ADB 状态同时保留 legacy 主 SHA 和完整 SHA 列表。当前匹配评分顺序是：任一精确 dll sha、target 主版本、manifest 显式支持版本、offline bootstrap wildcard；同等精确命中时优先推荐 schema 2 family 包，offline bootstrap 只在没有任何 full compat 包命中当前 payload 时自动推荐，且 probe v2 已记录相同 `pack_id + target_id + compat_version + source zip SHA + payload version + sts2.dll SHA` 终态失败时不再自动推荐。兼容包选择以 `<files>/instances/<profile_id>/instance.json` 中的 `compat_pack_id` 为准，schema 2 还会记录 `compat_target_id`，不再使用全局选中包作为运行时 fallback；从 legacy 内置包升级到 flat family 包时，启动器安装 bundled compat pack 后会把旧 `sts2-android-compat-v0.*` 启动配置自动迁移到 `sts2-android-compat` + 对应 `compat_target_id`，但不会覆盖用户手动选择的非 bundled 包。若当前启动配置未绑定兼容包、绑定的包已删除或 schema 2 target 缺失，启动前会先等待内置包安装完成，再弹出 Bottom Sheet：先从内置/已安装 full 包按现有 SHA/version 评分推荐最佳 target，只有没有任何 full 命中时才推荐未记录终态失败的通用离线包；用户可显式“使用推荐并继续”（写回当前 profile 的 `compat_pack_id` / `compat_target_id`），也可直接打开“版本 → 兼容包”管理，启动器不会静默改写 profile。若已绑定包存在但与 payload 版本不一致，仍显示风险对话框供编辑配置或承担风险继续；offline bootstrap 首次启动某个 pack/version/SHA 组合时会额外提示风险，并在运行时原子写 `<files>/launcher/offline-bootstrap-probe.json`，状态依次为 `starting / patches_installed / modeldb_initializing / ready` 或终态 `unsupported_api / apply_failed / runtime_failed`；手动选择已失败组合时显示详情并允许诊断重试，ADB 自动化 `status` 同时输出原始 `offline_bootstrap_probe`。当前不会仅因 `sts2.dll` SHA-256 不一致硬阻止 full compat 启动，但 manifest 中仍记录 SHA 供诊断和精确匹配升级使用。
+
+## 3. 本地配置 / 参考输入
+
+构建脚本不再写死某个 workspace 的相邻目录。首次配置：
+
+```bash
+cp .env.example .env
+cp local.properties.example local.properties
+```
+
+`.env` 统一保存机器相关环境变量：
+
+- `JAVA_HOME`、`ANDROID_HOME`/`ANDROID_SDK_ROOT`、`DOTNET_BIN`。
+- `STS2_ANDROID_RUNTIME_REFERENCE_ROOT`：参考 Android template/runtime，包含 `libs/`、`assets/dotnet_bcl/`、Gradle wrapper jar。
+- `STS2_FMOD_PLUGIN_AAR`、可选 `STS2_FMOD_ANDROID_LIBS_DIR`（默认从 AAR 旁的 `arm64/` 读取经 SHA 校验的 FMOD 2.03.06 native 三件套）、`STS2_CRYPTO_NATIVE_JAR`。
+- `STS2_ORIGINAL_V103_REFERENCE_DIR` / `STS2_ORIGINAL_V1061_REFERENCE_DIR` / `STS2_ORIGINAL_V1070_REFERENCE_DIR` / `STS2_ORIGINAL_V1071_REFERENCE_DIR` / `STS2_ORIGINAL_V1080_REFERENCE_DIR` / `STS2_ORIGINAL_V1090_REFERENCE_DIR` / `STS2_ORIGINAL_V1100_REFERENCE_DIR` / `STS2_ORIGINAL_V1110_REFERENCE_DIR`（或对应 `*_ROOT`）：original compile gate 引用目录，需包含 `sts2.dll`、`GodotSharp.dll`、`0Harmony.dll`；`V1090` / `V1100` 是共享旧 target 保留的历史变量名，分别指向 v0.109.1 / v0.110.1；`V1110` 对应当前独立 v0.111.0 public-beta target。
+- `RELEASE_KEYSTORE_*`、可选 `STS2_PAYLOAD_ZIP`、可选 `STS2_EXTERNAL_PROJECTS_ROOT`。
+
+`local.properties` 保存非 secret 的本地构建选项，例如 Gradle task、dist 输出路径、compat pack staging 目录、默认 `ReferenceFlavor`、外部 GitHub 参考项目 clone 目录。完整说明见 `doc/build/local-configuration.md`。
+
+不要提交用户游戏 zip、original/reference DLL、完整 runtime、keystore 或 `.env` / `local.properties`。
+
+## 4. 当前目录结构
+
+```text
+s2_re/
+  AGENTS.md                        # 本文件，给后续 agent/维护者的操作约定；不是用户手册
+  README.md                        # 面向普通开发者/测试者的入口说明
+  LICENSE                          # 本仓库原创代码 MIT License
+  THIRD_PARTY_LICENSES.md          # 第三方来源/许可证摘要与发布前合规检查
+  android/                         # Android shell / Godot Android Gradle 工程根目录
+    AndroidManifest.xml            # Activity/provider/权限；GameSettingsActivity 是默认 launcher
+    build.gradle                   # Godot Android template 风格应用模块配置
+    config.gradle                  # AGP/Kotlin/SDK/NDK/Java 版本与 Godot export property helpers
+    gradle.properties              # applicationId、ABI、签名、构建类型等本地属性
+    settings.gradle                # pluginManagement + install-time asset pack
+    assetPackInstallTime/          # install-time asset pack 占位
+    src/com/godot/game/            # Java/Kotlin shell、附加设置、payload/版本/兼容包管理、Steam 中心、GodotApp 桥
+    steam-protocol/                # Steam CM/auth/content protobuf 协议子模块
+    steam-content/                 # SteamPipe depot manifest/chunk 下载子模块
+    res/                           # 附加设置/崩溃页/文件浏览器/图标/shortcut/theme 等 Android 资源
+    assets/
+      bootstrap.pck                # 无游戏 payload 时的最小 Godot bootstrap pack
+      port_compat.pck              # legacy fallback overlay pack，脚本生成
+      compat_packs/                # 构建时生成的内置兼容包 zip assets，gitignore
+      # res/drawable/ic_ms_*.xml    # Material Symbols Rounded 字体离线生成的官方轮廓 vector drawable
+      dotnet_bcl/                  # 大型 .NET/Godot runtime DLL，同步生成，gitignore
+      payload/                     # 直装版临时内置 zip，gitignore
+    libs/                          # Godot/FMOD/template AAR，同步生成，gitignore
+  port-mod/                        # git submodule: ModinMobileSTS/sts2-android-compat，full 兼容补丁仓库
+    compat_manifest.*.json         # 当前分支的兼容包 manifest
+    STS2AndroidPortCompat/         # 兼容插件源码，输出 STS2Mobile.dll
+      STS2Mobile.csproj            # runtime 期望的程序集名：STS2Mobile.dll
+      ModEntry.cs                  # unmanaged entrypoints: InitializeGodotSharp / Apply
+      Patches/                     # 平台、设置、输入、MOD、LAN、shader、生命周期等 Harmony patch
+      Android/                     # Android settings/path bridge
+    overlay/                       # 打包进 port_compat.pck 的 shader/resource overlay
+    refs/                          # 可选本地 original compile gate 占位说明；脚本优先用 .env 的引用目录
+    targets/active/*/target.json   # flat matrix 目标版本描述；移到 archived 后默认不再内置
+    tests/DeferredModPatchQueue.Tests/ # #33 PatchAll/危险 UI cctor 合成回归，不含商业游戏代码
+    tools/build-compat-pack.sh     # 导出独立可安装 compat pack zip
+    tools/build-compat-matrix.sh   # 单 checkout 构建 schema 2 family compat pack
+    tools/test-deferred-mod-patch-queue.sh # 运行上述 Ekyso Harmony 合成回归
+    tools/test-harmony-method-reference-importer.sh # 运行 Harmony/Cecil method modifier 合成回归
+    tools/test-modeldb-shadow-placeholder.sh # 运行 ModelDb shadow placeholder 合成回归
+    tools/test-extended-multiplayer-rooms.sh # 运行超过四人房间 UI 合成回归
+  offline-bootstrap/               # 通用离线启动层，独立于 port-mod；不静态引用 sts2.dll
+    src/STS2OfflineBootstrap/      # 输出程序集名仍为 STS2Mobile.dll；含保守的 ModelDb 反射合约解析器
+    tests/STS2OfflineBootstrap.ContractTests/ # 合成 API 形状与本地 original 引用契约测试
+    overlay/                       # 最小有效 overlay，不替换游戏资源
+    tools/test-offline-contract.sh # 运行 synthetic + 已配置 original reflection contract gate
+    tools/build-offline-pack.sh    # 先跑 contract gate，再构建 sts2-android-offline-bootstrap.zip
+  windows/                         # Windows 启动器（Electron），与 Android/iPad 同一套小屋前端
+    src/main/                      # 主进程：Steam 检测/启动、MOD（settings.save）、存档快照、配置
+    src/renderer/                  # 界面：HTML/CSS/JS 复刻 CottageTheme、插画热区、吉祥物 SVG
+    scripts/prepare-assets.js      # 从 android/res、doc/images 复制共享插画/字体/图标
+    test/                          # node --test 后端单元测试
+  tools/
+    port_mod_ast_audit.py          # 游戏版本更新后对比两版 C# 语法结构，并把变化映射到 port-mod Harmony/反射触达点
+    android/
+      env-from-s2.sh               # 兼容旧名称：source 后加载 .env 中的 JDK/Android SDK
+      gradle-with-s2-env.sh        # 在 android/ 下带本机环境执行 Gradle
+      sync-runtime-from-references.sh # 同步 Godot/FMOD/dotnet_bcl 等大型运行时产物
+      patch-godot-input-pool.py # 修补 staged Godot AAR 鼠标输入事件池泄漏
+      test-godot-input-pool.sh  # Godot debug/release AAR 输入池静态回归
+      build-port-mod.sh            # 编译当前 submodule checkout 并 stage legacy fallback dll/pck
+      stage-bundled-compat-packs.sh # 默认构建 full flat family 包；COMPAT_PACK_BUILD_MODE=legacy 时跑 legacy 多分支构建
+      stage-bundled-compat-artifacts.sh # APK 默认入口：stage full family 包 + offline bootstrap 包
+      bundled-compat-packs.json    # legacy 内置兼容包分支列表
+      make-bootstrap-pck.py        # 生成最小 bootstrap.pck
+      make-port-overlay-pck.py     # 从 port-mod/overlay 生成 legacy fallback port_compat.pck
+      generate-material-symbol-vectors.py # 从 Material Symbols Rounded TTF 生成 Android vector drawable
+      fmod-shim/                   # 替换 FMOD Java class 的 shim 源码
+    package/
+      validate_payload_zip.py      # 校验 PC 游戏 zip 必需文件/PCK magic/hash
+      build_android_body_zip.py    # 用匹配源码重新导入 Android 资源 PCK，并保留 PC 原版 DLL 组装优化本体 zip
+      build_android_body_zip.sh    # 上述 Python 工具的环境加载 wrapper
+      build_importer_apk.sh        # 构建不内置游戏 zip 的导入版 APK
+      build_direct_apk.sh          # 构建临时内置游戏 zip 的直装版 APK
+      build_windows_launcher.sh    # 构建 Windows 启动器 zip（Windows/Wine 下另出安装包）
+    debug/
+      sts2-adb-debug.sh            # ADB 自动化调试：安装、推送 payload/compat/MOD、准备/启动、日志/Perfetto 采集
+    diff/                          # 差异清单工具
+    deps/                          # GitHub 外部参考项目清单与自动准备脚本
+    git/report-heads.sh            # 输出父仓库与 submodule HEAD/branch/upstream 状态
+  doc/                             # 公开项目文档入口；新增/修改用户可见说明时同步维护
+    README.md                      # 文档索引与维护规则
+    architecture/                  # 项目结构、目录职责、版本模型
+    build/                         # 构建/打包/发布流程
+    runtime/                       # 启动、兼容包、MOD 加载流程
+    modding/                       # 普通 MOD 与兼容包开发维护说明
+    plan/                          # 长期设计计划或已落地方案 checklist
+  dist/                            # APK/兼容包输出副本，本地生成，gitignore
+  .agent/                          # agent 草稿/报告/临时 worktree/参考 clone/agent-docs/历史备份，gitignore，不追踪
+    debug/runs/                    # ADB 自动化调试结果、logcat、Perfetto trace、本地拉回诊断，gitignore
+    agent-docs/changelog/          # agent-only changelog，本地接力用，不提交
+    historical-backup/docs/        # 旧 docs/ 历史 diff/validation 本地备份，不提交
+```
+
+## 5. 文档规范
+
+长期公开项目文档统一放入 `doc/`，agent 本地接力文档放入 ignored 的 `.agent/agent-docs/`：
+
+- `doc/README.md`：项目文档索引、维护规则。
+- `.agent/agent-docs/README.md`：本地 agent 文档索引，不提交。
+- `.agent/agent-docs/changelog/`：每次修改新增一条 `YYYY-MM-DD-简短主题.md`，记录背景、改动、验证、注意事项；这是 agent-only changelog，不提交到公开仓库。
+- `.agent/historical-backup/docs/`：旧 `docs/` 历史 diff/validation 资料本地备份，不提交。
+- `doc/architecture/project-structure.md`：目录职责、运行时私有目录、版本/兼容包模型。
+- `doc/build/building-and-packaging.md`：构建环境、脚本流程、常用命令、产物位置。
+- `doc/runtime/compat-pack-loading-flow.md`：移动端兼容包与普通 MOD 的详细加载流程。
+- `doc/modding/mod-and-compat-notes.md`：普通 MOD 目录、启停协议、兼容补丁开发注意事项。
+
+维护要求：
+
+1. 改动构建脚本、目录结构、版本矩阵、兼容包流程时，必须同步 `AGENTS.md` 和对应 `doc/` 页面。
+2. 每次可见行为变化或维护规则变化都要新增 `.agent/agent-docs/changelog/` agent changelog；不要再新增 `doc/changelog/`，也不要把 changelog 提交到公开仓库。
+3. `README.md` / `doc/` 是公开项目文档；`AGENTS.md` 是编码代理/维护者专用操作约定；`.agent/agent-docs/` 是本地 agent 文档，`.agent/` 其余内容是本地 scratch/历史备份，均不入库。一次性 context/review/scout 记录放 `.agent/`，长期计划才整理进 `doc/plan/`。
+4. 旧 `docs/` 目录已搬到 `.agent/historical-backup/docs/`，不再公开追踪；需要公开沉淀的历史资料应整理成 `doc/` 下的长期文档。
+5. 文档中不要写入用户私有 zip hash/路径之外的敏感信息，不要复制商业游戏资源内容。
+6. 新增直接引用资源、改编/参考第三方仓库实现或新增依赖时，同步 `THIRD_PARTY_LICENSES.md`，并在 `README.md` 写明用户可见来源。
+
+## 6. Android shell 关键点
+
+- Java package 保持 `com.godot.game`，便于兼容旧 C# / patched runtime 桥；实际 `applicationId` 由 `android/gradle.properties` 设置为 `com.megacrit.sts2re`。
+- `GameSettingsActivity` 是默认 `LAUNCHER`：首次进入欢迎向导/附加设置页；设置页的“桌面图标启动后”偏好可让桌面图标在向导完成且 payload 就绪后自动走 `launchGame()` 直接进游戏，默认仍打开附加设置。
+- “设置 → 操作”的 `android_floating_mouse_enabled` 默认关闭；`FloatingMouseInputController` / `FloatingMouseOverlayView` 提供独立应用内鼠标悬浮按钮，按 **LEFT → RIGHT_ONCE → RIGHT_LOCKED → LEFT** 切换。单次右键在游戏手势结束后复位，使用前再点按钮锁定，不是限时双击；拖动/取消不切换。56dp 圆形、30dp 自绘鼠标图标、锁标记和 1.5 秒闲置淡出参考 SlayTheAmethystModded 设计，不复制其代码/资源。仅在 Godot render View 新开始的手指流上转换 `SOURCE_MOUSE/BUTTON_SECONDARY` 并通过真实 `GodotInputHandler.onGenericMotionEvent` 派发；不得在 Activity 全局拦截触屏、重复传入原始左键/双指流或修改 Surface/ContentScale。主指离开后必须吞掉全部残余指针，失焦/暂停/解绑补释放，普通前后台保留锁定，关闭/销毁重置；main-loop 绑定在 Android UI 线程，未就绪时不调用 native。开关保持当前 profile 的 settings 协议并同步 `AndroidSettingsMerge`（已在 legacy 注入列表），按钮位置独立按安全区域比例保存。回归 `FloatingMouseInputTest`，实际 native 输入 smoke 使用无商业资源的 Godot 场景。
+- 主要页面/管理器：
+  - `WelcomeSetupPage`：首次向导。
+  - `GamePage` / `SettingsPage` / `ModsPage` / `GameVersionManagerPage`：主页、设置、MOD、版本/兼容包管理；启动器图标统一使用 `tools/android/generate-material-symbol-vectors.py` 从 bundled Material Symbols Rounded 字体（`android/res/font/material_symbols_rounded.ttf`）离线生成的官方轮廓 vector drawable（`android/res/drawable/ic_ms_*.xml`），运行时由 `MaterialSymbols` helper 按 glyph 名或旧 `R.drawable.ic_*` 映射加载，避免依赖系统字体 ligature；手机启动器继续锁竖屏，平板/大屏启动器 Activity 使用系统方向；launcher/工具页统一 `SystemBarInsetsHelper.enableEdgeToEdge()`（`decorFitsSystemWindows=false`）并按 scaffold 分区直接消费 `WindowInsetsCompat` 的 `systemBars|displayCutout`（顶栏 top、底栏 bottom、rail top+bottom、内容左右/底；输入页可用 `applySystemBarPaddingWithIme`），**不要**用几何 overlap 测量或 `status_bar_height` dimen；工具页顶栏优先布局内 `MaterialToolbar`/自定义 View，不再依赖 window Support ActionBar + `action_bar_container` 内部 id；横屏时主 shell 从底部导航切换为左侧 Navigation Rail，页面内容通过 `ExtraSettingsUi` 的响应式最大宽度容器居中，首页使用 hero/状态工具双栏，设置/关于页卡片可两列排列，MOD/版本/Steam/Nexus/WebDAV 页面至少保持居中限宽；`GamePage` 按 `propotype_mainpage.html` 的 MD3 深色首页原型实现：顶部 STS2 标题 + Steam 登录/云存档 chip，ready 状态使用动态渐变/光晕 hero 启动卡，未导入状态使用虚线空状态卡，MOD/存档状态卡带 150% 淡色背景大图标、按压缩放与水印放大回正微动效，维护/高级工具为 4 列快捷按钮并保留 Android ripple，其中主页高级工具入口打开“启动配置”而不是全局兼容包选择；`SettingsPage` 内部使用“画面 / 操作 / 存档 / 系统”顶部 Segmented Button 分区，并把下拉类设置改为 Bottom Sheet 单选列表，预加载详细 BottomSheet 刚打开时可通过内容区上滑完整展开，完整展开后内容滚动区不参与降下/关闭，只能下拉顶部手柄关闭；画面高级项里的“旋转模式”写入 `android_screen_rotation_mode`，默认 `user_landscape`（跟随系统横屏锁定状态旋转），也可选为 `auto`（自动旋转强转，通过重力感应忽略系统锁定在正反横屏中切换），或固定 `landscape` 与 `reverse_landscape`；首次/默认推荐图形配置为 OpenGL ES、关闭 MSAA、关闭垂直同步；旧 `android_flip_screen_180` 仅作为兼容布尔字段同步维护。`ModsPage` 顶部是 MOD 总开关、药丸搜索框和可横向滚动 Chip 操作组；Nexus 商店入口当前在 MOD 页隐藏，排序/筛选/MOD 方案入口位于 Chip 组；MOD 卡片默认折叠，展开后显示完整描述、可点击跳转文件浏览器的清单路径、作者、依赖和“选中/备注/信息/删除”图标按钮；支持本地备注显示名（只用于启动器 UI；备注为主标题，原名显示在版本号前）；自动探查 `dependencies` / `min_game_version` / `has_pck`·`has_dll` 文件与 `settings.save` 中原版 `ModSettings.ModList` 平面手工顺序的依赖顺序问题，问题 MOD 黄色高亮，AppBar 标题后黄色感叹号+数量可打开问题 BottomSheet，BottomSheet 中按紧凑 MOD 卡片展示名称、版本/作者和逐条警告，警告正文为白色且关键对象红色高亮；顺序问题可一键按原版 `ModManager.SortModList` 规则重写平面 `mod_list`；MOD 分组只影响启动器展示，不创建、重命名、删除或移动真实 MOD 文件/目录，也不参与运行时加载顺序；支持前置库/内容模组/用户新建分组/未分组，长按左侧手柄拖拽到分组时会震动并显示半透明虚线 ghost 占位；旧 `.sts2_mod_group` 目录标记仅作为历史兼容读取。
+  - `FileBrowserActivity` / `LogViewerActivity` / `LogFileViewerActivity`：文件浏览器与日志查看器使用独立 `Theme.Sts2Tools`，统一深色 Material 3 顶栏、Bottom Sheet、对话框与点击样式，选择态标题固定白色。文件页的面包屑、剪贴板横幅、新建/导入抽屉和选择底栏保持真实操作可达，关闭时取消底栏动画并立即移除；日志列表多选底栏仅分享/导出，“一键打包最新”通过 `RuntimeLogFiles` 选每类修改时间最新的 live `godot.log` / `sts2.log`，不包含归档。详情未选时保留复制全部/分享/导出/所在位置，按原文件行号选择后改为复制/分享片段/上下各扩展20行，菜单提供搜索和 LLM 分析。`LogViewportCanvas` 在 HorizontalScrollView 的无限宽探测下仍守住换行宽度；关闭换行允许横向滚动。双指以每帧合并的 typography payload 连续调整 10–30sp，并保持阅读锚点、选择与搜索状态。页面文字以中文大号 UI 内容为主，Material Symbols 通过生成的 vector drawable 加载；创意工坊不随这两页改造变更。回归：`FileBrowserSelectionTest`、`LogViewportCanvasTest`、`RuntimeLogFilesTest`。
+    日志列表扫描必须在后台使用无排序迭代遍历，优先已知日志目录但不缩小日志发现范围；首条立即发布，后续按批次/时间输出，UI 最多每 150ms 合并刷新一次，不能为每条日志堆积回调。圆形加载动画在扫描文字上方，无条目时内容区居中、有条目时底部居中，直到遍历完成才关闭；最新 live 文件选择不得在主线程重新检查全部候选。销毁页面取消扫描和未投递批次；回归 `LogFileScannerTest` / `RuntimeLogFilesTest`。
+  - `llm/` / `loganalysis/`：通用 `OpenAiClient` / `ChatSession` / `LlmConfig` / `LlmSettings` 与日志专用 `LogAnalysisActivity` / `LogTools` 分开维护。用户配置 Base URL、API Key、Model ID 与可选 `reasoning_effort`，加密保存且不通过 Intent、日志或明文 fallback 传递。首次发送需明确授权；首轮只带问题与授权文件元数据，模型仅可调用 `read_lines` / 大小写敏感字面 `search_logs`，不能读任意路径、执行 shell 或自动上传全文。工具按原文件 1-based 行号分页，有截断/next_line 边界；HTTP、扫描、加密读写在后台，取消/销毁/配置或授权文件选择变更隔离旧 generation 并取消请求，失败回退不完整的会话 turn。仅支持提供标准 Chat Completions tools 的服务，不自动去掉工具/effort 或改用全文模式；不复用 Steam 凭证、Workshop 代理与网络策略。回归：`LogToolsTest`、`OpenAiSessionTest`、`ChatSessionTest`；公开边界见 `doc/architecture/project-structure.md` §3.1。
+  - `SteamWorkshopActivity`：Steam 创意工坊页面；由 MOD 页“创意工坊”chip 打开，按 `.agent/proptype/proptype_steam.html` 的 MD3 结构实现列表、详情、已下载和设置四屏，侧栏提供“热门 / 最新发布 / 最近更新 / 最多订阅”排序（默认热门）与“本周 / 30 天 / 3 个月 / 6 个月 / 一年 / 全部”时间筛选（默认本周），侧栏内容可滚动，侧栏顶部显示 Steam 中心登录账号/SteamID64 或匿名状态，并保留应用深色配色；未登录时通过 Steam Community 公开 Workshop 页面匿名浏览塔2公开条目并用 published file details 补全大小/更新时间，已登录时优先复用 Steam 中心保存的 refresh token/SteamID64 走 Steam CM 查询，缺少 SteamID64 时会先验证 refresh token 补齐，失败则回落到公开浏览；侧滑菜单底部提供按 Workshop ID/URL 直接打开已知条目的入口，搜索框粘贴纯数字 ID 或 Workshop URL 时也会直接进入应用内详情；列表预览图、详情截图和前置 MOD 来自真实 Steam 公开页面/API，不使用占位数据，列表底部不显示翻页按钮，靠近底部时自动加载下一页并追加条目；图片加载会优先使用详情页原图并在兼容访问、原始域名和强制兼容访问之间重试；默认开启“创意工坊兼容访问”，对 `steamcommunity.com`、常见 Steam 图片媒体域和 `api.steampowered.com` 使用 WorkshopAndroidDownloader 同款 `steamcommunity.rmbgame.net` / `steamstore.rmbgame.net` 转发路径，并按参考项目允许 SteamPipe 动态 HTTP CDN endpoint 及区域内容节点的 301/302 跳转，解决部分网络下 Steam Community/API 与 UGC manifest/chunk 下载直连超时、区域 CDN 重定向失败或被 Android 明文策略拦截；下载条目通过现有 MOD staging 导入当前 launch profile 的 MOD 根目录；创意工坊设置页提供“下载分支”：默认 `auto`，自动优先使用 Steam 下载 payload 时记录的 `source.steam.branch`，其次使用当前启动配置兼容包 manifest target 上的 `steam_branch`，两者都没有时才在下载前询问；也可固定为 `public`、`public-beta`、自定义分支或“每次询问”。下载器会先用 `PublishedFile.GetItemInfo#1` 探测 author snapshots；若该接口只返回顶层 manifest 而没有 author snapshots，则继续用 `PublishedFile.GetChangeHistory#1` 从 saved snapshot 历史中提取 branch min/max 与 manifest；固定分支或 `auto` 已能推断分支时会直接进入后台下载，manifest/depot/request code 在下载任务内部解析，避免一键队列被 UI 级分支解析串行阻塞；设置为“每次询问”或自动无法推断时才弹出分支/manifest 候选 Dialog，列表项展示 branch、manifest、depot、snapshot 时间、branch min/max、解析来源与 fallback 原因，用户选择后才开始下载；选择的 branch 会传给 `ContentServerDirectory.GetManifestRequestCode#1`；当 Steam 只暴露默认 manifest 而没有分支快照时，Dialog/自动解析会额外派生目标分支的“按分支请求默认 manifest”候选并明确标注 fallback 原因；若 CM snapshot、change history 和默认 manifest 都不可用则回退公开 WebAPI `hcontent_file` / `file_url` 候选；最终以设置中的导入分组（默认 `workshop`）下 `<branch>/<published_file_id>/` 作为单个 Workshop item 的安装边界；下载前会解析 Steam `RequiredItems` 并用 `<files>/workshop/library/index.json` + 对应 item 目录内真实存在的 MOD manifest 判断前置是否已覆盖，缺失时弹出前置列表并可一键按队列下载前置和当前条目；下载器会在无账号时尝试匿名 Steam 会话/公开 CDN 回退，部分受限条目仍可能需要登录；下载支持后台任务，列表/详情下载按钮点击后立即切换为圆形进度环和居中的方形停止按钮，已下载且当前版本按钮显示“详细信息”，点击会打开对应 item 目录内的本地 MOD 详情；已下载页条目卡片和条目图标按钮进入应用内 Workshop 详情而不是跳转 Steam App；后台下载线程使用低优先级，直链和 UGC 路径都会合并进度事件，UGC 分块下载默认并发 2（设置页可调 1-8）以降低下载期间 UI 卡顿；导入成功后立即静默删除原始下载 staging，启动器/创意工坊页每天最多一次静默清理残留 `<files>/workshop/downloads/` 条目；若只有下载记录但 item 目录已找不到本地 MOD，下载按钮显示“重新下载”，已下载页卡片显示本地文件已删除状态；下载页分为“下载中 / 已下载”，检查更新位于已下载页 AppBar 右上角；下载后在 `<files>/workshop/library/index.json` 按 `published_file_id@workshop_branch` 记录 PublishedFileId、分支、解析来源、resolved manifest、匹配 branch min/max、远端更新时间、导入 MOD ID、item 根目录、大小和内容 SHA-1 摘要，用于手动/自动更新检查；更新任务会固定沿用已安装记录的分支，导入完成后直接覆盖旧项并清理同一条目的 legacy 索引记录，避免分支迁移前的旧记录继续提示更新；已下载页可删除单条下载记录，并可勾选同时删除对应 `published_file_id` item 目录；设置屏搬入 Steam 状态、已下载列表入口、导入分组、兼容访问开关与 UGC 分块并发设置。实现参考 `.agent/reference-repos/workshop-android-downloader` / <https://github.com/Apricityx/WorkshopAndroidDownloader>。
+  创意工坊详情页预览图和截图在应用内打开 `WorkshopImageViewerActivity`，支持双指缩放、单指平移；长按图片提供保存到系统相册和 Android 分享。查看器沿用兼容访问/原始地址重试，压缩响应先落入 cache 临时文件再按屏幕尺寸采样解码，分享通过现有 FileProvider 授权。
+    侧栏“已订阅MOD”仅在 Steam 中心已有登录记录时显示，与普通浏览及本机“已下载”列表分开；使用当前账号的 CM 会话调用 `PublishedFile.GetUserFiles#1`（`type=mysubscriptions`、`appid=2868840`、`sortmethod=subscriptiondate`），不能把查询失败回落成公开列表，也不能用旧 UCM 枚举或用户公开订阅页替代已验证的当前账号订阅集合。订阅列表复用详情、下载、前置与分支/导入流程，不修改 Steam 订阅关系；不受普通浏览排序/时间筛选影响。按服务端 total 和已请求页位置结束分页，不依赖过滤后可见行数；注销/账号切换必须清空旧结果，并用 list generation + 账号身份拒绝迟到回调。回归：`SteamWorkshopSubscriptionsTest`；真实账号 CM 分页及实际 Activity 画面 smoke 的诊断放在 ignored 的 `.agent/`，不得保存令牌到报告或源码。
+  - `NexusModsStoreActivity`：实验性 NexusMods 商店 Activity 仍保留但 `ModsPage` 入口暂时隐藏；用户手动保存 Personal API Key 后可浏览热门/最新/近期更新结果、按 URL/数字 ID 精确查询、下载 ZIP 并导入到当前 launch profile 的 MOD 目录（全局 `<files>/mods/` 或隔离 `<files>/instances/<id>/mods/`）；下载导入与本地导入共用同 ID 冲突和路径覆盖确认流程。非 Premium 下载若被 NexusMods API 拒绝，可引导用户打开网页并粘贴 NXM 链接中的 `key/expires`。
+  - `SteamAccountActivity`：Steam 中心；首次打开会显示带动态倒计时、5 秒后才能关闭的账号安全提示（本地保存 refresh token、可信来源、未知 MOD 风险、云存档备份、国内可能需要加速器），页面底部常驻“安全说明”按钮可再次查看；完成账号密码登录、Steam Guard、refresh token 加密保存、SteamPipe 下载 STS2 payload 到 payload store，以及当前 launch profile account root 的 Steam Cloud 手动拉取/上传和可选自动同步设置。Steam credential auth 是可恢复事务：账号密码和本次输入的 Guard 动态码只通过进程内 binder/内存交给认证服务，不写入 Intent、磁盘或日志；BeginAuth 成功后仅把短期 transaction handle（transaction id、Steam client/request id、轮询间隔、challenge/phase、deadline，以及 Steam 已返回的可复用 guard data）写入 `EncryptedSharedPreferences`，默认 4 分钟过期。游戏本体下载提供 1 / 2 / 4 个 chunk worker，默认 2；下载器复用筛选阶段的 prepared manifest，worker 并发请求和解密/解压后由单 writer 按 offset 写入，结果通道与在途数据受 16–64 MiB 自适应内存预算约束。任务目录稳定为 `<files>/steam/downloads/payload-<fingerprint>/`，同一 branch/depot/manifest 重试会校验 `*.steam.part` 的已有 chunk 并续传，旧 `staging-*` / `failed-*` 直接清理，其他 fingerprint 任务超过 7 天才清理；下载与最终安装全程持有 `<files>/steam/downloads/locks/payload-download.lock` 的进程/文件系统独占锁，Activity 重建也不得并写另一个 payload 任务；`.payload_manifest.json` 的 `source.steam` 会记录 `concurrent_chunks`。Steam 目录返回的 `use_as_proxy` 必须保持显式 proxy→origin fallback 顺序（HTTP-only proxy 也必须先于 HTTPS origin），并遵守 bypass 类型；SteamPipe manifest/chunk 允许跟随区域内容节点的 HTTP(S) 重定向；Workshop 调用方使用连接/读取/写入/整次请求 `25/75/75/120s` 的折中超时，游戏本体保持自己的独立策略，共享 transport 不得覆盖二者；depot auth token 只用于 Steam 返回的 origin/proxy 及其区域内容重定向目标，不得发给 Steam Community/API/图片所用的 rmbgame 兼容访问。网络请求必须保持 coroutine-aware，取消 payload 下载要继续向下取消当前 OkHttp Call。
+  - `SteamAuthForegroundService` / `SteamAuthTransactionManager`：以 `dataSync` 前台服务持有登录事务和 CM 轮询。手机 App 确认 challenge 一经选择就立即开始轮询，用户可直接切到 Steam 批准，不需要先点“已批准”，也不依赖小窗/分屏；`SteamAccountActivity.onStop()` 只注销观察者并解绑，不取消事务。CM WebSocket 断开时建立新的未认证连接，并复用已加密保存的原 `client_id` / `request_id`（及轮询返回的 `new_client_id`）继续 PollAuthSessionStatus；Activity 重建或可恢复的进程重启后也从同一 handle 恢复。成功结果只有在 transaction generation 仍匹配时才原子写入 refresh token 并清除 pending handle，迟到的旧轮询不得覆盖新登录；用户取消、超时、无效 handle 只清理对应 pending transaction，不清除既有已登录账号。不要通过 WakeLock、常驻 Activity 或强制小窗维持认证。
+  - `WebDavCloudActivity`：WebDAV 云存档中心；保存 WebDAV URL、用户名、密码/应用令牌与可选远端槽位到加密偏好，只同步当前 launch profile account root 的白名单 STS2 存档文件，远端目录为用户配置 base URL 下的 `SlayTheSpire2/saves/<slot>/`，并用 `.sts2re/manifest.json` 记录 SHA-1 manifest；支持测试连接、刷新清单、拉取、上传、强制上传、启动前拉取和干净退出后上传。
+  - `LocalSaveSnapshotManager`：本地存档快照管理；启动前创建 `before-launch`，游戏干净退出回设置后创建 `clean-exit`，恢复快照前创建 `before-restore`，默认保留当前 launch profile 最近 5 个 zip 快照；设置页“存档”分区可立即创建和恢复历史快照。
+  - `PayloadManager`：导入/校验/安装 PC 游戏 zip 或 SteamPipe 下载目录到 payload store。
+  - `LaunchProfileManager`：维护 `<files>/payloads/<payload_id>/game/` 与 `<files>/instances/<profile_id>/instance.json`，支持同一游戏本体创建多个全局/隔离存档和 MOD 的启动配置，并把 `compat_pack_id` 作为每个配置自己的选择；schema 2 family 兼容包还会保存 `compat_target_id`。从旧 schema 1 bundled 包升级到 flat matrix 内置包时会按旧 pack id / payload 匹配迁移到 `sts2-android-compat` family target。切换配置不复制 PCK。游戏本体缺失时配置仍保留且可选择/编辑，启动时提示用户重新导入、下载或重新绑定。
+  - `GameBodyVersionManager`：legacy facade，版本选择委托给 `LaunchProfileManager`，不再执行 active/归档目录复制。
+  - `CompatPackManager`：安装、导入、删除兼容包；从 APK assets 安装内置兼容包；支持 schema 1 单目标包和 schema 2 family 包的 `targets[]` variant；按 payload manifest 的 dll sha/version 匹配目标版本供新建/编辑启动配置及“缺少兼容包”启动 Bottom Sheet 推荐使用，`sts2_dll_sha256` 可为单字符串或多 SHA 数组且任一元素都可精确命中，schema 2 family 包优先于旧 schema 1 包，离线 wildcard 只在没有 full 命中时作为最低优先级候选。解析当前 schema 2 选择时必须要求 profile 的 `compat_target_id` 存在且真实命中，不能静默回落 family 第一个 target。版本详情会显示全部短 SHA，ADB 状态同时输出 legacy 主 SHA 与完整数组。安装 bundled 包后会触发旧 bundled pack id 到 flat family target 的启动配置迁移。兼容包页不再提供全局“选中”动作，schema 2 family 目标按 `pack_id` 自动分组并可折叠，子项展示 target 名称/支持版本/通道；删除兼容包也不静默替换各启动配置的 `compat_pack_id` / `compat_target_id`。
+  - `GameLaunchPreparationManager`：启动前后台准备 Mono publish 目录、兼容包 dll、overlay pck、payload assembly 和纹理缓存清理。
+  - `DebugAutomationActivity` / `DebugAutomationReceiver`：ADB 自动化调试入口；host 侧 `tools/debug/sts2-adb-debug.sh` 用 `run-as` 写入 `<files>/automation/token.txt` 后，通过 exported 调试 Activity 触发状态查询、配置修改、payload/compat/MOD 私有 inbox 导入、启动准备、启动游戏和日志/性能采集。Receiver 仅作为兼容广播入口转交 Activity；长任务不要直接放在 BroadcastReceiver 生命周期内。
+- `GodotApp`：真正的 Godot 游戏 Activity。
+- `GodotApp` 启动行为：
+  - 首次向导未完成时会重定向回 `GameSettingsActivity`。
+  - `getCommandLine()` 加 renderer/log 参数，并固定追加 `--force-steam off` 作为原版 Steam 初始化跳过兜底；不得再把 `fullscreen_render_size` 转为 Godot `--resolution`，根 Window 必须先按真实 Android Surface/native 尺寸初始化，随后由 full compat 动态 render-target 协调器应用该设置。日志等级由附加设置 `log_level`（默认 `info`，可选 `off` / `debug` / `very_debug`）转为 STS2 `-log <LogType> <LogLevel>` 命令行，覆盖 Generic/Network/Actions/GameSync/VisualSync；选择 `off` 时不配置 `godot.log` 且不追加 STS2 `-log` 参数；有当前 launch profile payload 的 `SlayTheSpire2.pck` 时传 `--main-pack <files>/payloads/<payload_id>/game/SlayTheSpire2.pck`，否则使用 `assets/bootstrap.pck`。设置页“系统”分区的 `android_performance_overlay_enabled` 默认关闭；开启后 `GodotApp` 写入 `<files>/launcher/enable_debug_menu.flag`，compat 层从 overlay 加载 `godot-debug-menu` 详细性能面板。
+  - APK manifest 默认声明 `android:appCategory="game"` / `android:isGame="true"`，让 OEM 游戏/GPU 调度识别 Godot 游戏 Activity；`GodotApp` manifest 默认 `sensorLandscape`，并在 `onCreate` / `onResume` / Godot 主循环开始后按 `android_screen_rotation_mode` 原生调用 `setRequestedOrientation()`：`user_landscape` 为跟随系统横屏，`auto` 为 `SCREEN_ORIENTATION_SENSOR_LANDSCAPE` 并额外启用重力计强转，`landscape` 为普通横屏，`reverse_landscape` 为反向横屏。`GodotApp.onWindowFocusChanged()` 只更新 Java 侧焦点状态和刷新率请求，不得直接调用 `GodotLib.focusin/focusout`，native 焦点交给 Godot Activity 自身 pause/resume 路径派发。`HighRefreshRateController` 由启动器“系统”分区预加载下方及游戏内 Android 设置的 `android_display_refresh_rate_mode` 三挡单选控制：`high` 默认最高兼容刷新率，`60hz` 同尺寸近似 60Hz（含 59.94Hz），`system` 清空 Window 偏好并撤销 Surface vote。旧 `android_high_refresh_rate_enabled` true/false 仅迁移为 high/system，新字段优先，迁移后移除旧字段。没有兼容 60Hz 目标时撤销旧请求并交回系统，不选 50/90/120Hz，不承诺 OEM 锁定，不改游戏 FPS/VSync。控制器保持 Activity 级 generation + surface epoch single-flight，只有 resumed + focused + render View attached + 有效 Surface 才 apply；100/500/1500ms 有限重试，失焦、pause、destroy、Surface 销毁及模式切换取消旧回调。Android 12+ 同一 Surface 未变的模式只投票一次，模式切换允许更新/撤销；精确 mode 设置 ID，alternative-only 清空 ID 并使用刷新率偏好，随后有界验证实际 mode/Hz，显式 mode 不符不得报告 verified。不得使用 `SurfaceControl`、改 Surface/viewport 尺寸或在未变模式下重复投票。回归：`HighRefreshRateControllerTest`、`DisplayRefreshRateSettingsTest`。
+  - 显示设置的旋转模式还可显式选择 `portrait`（“竖屏，需配合竖屏 MOD”），默认不启用；Java 使用 `SCREEN_ORIENTATION_PORTRAIT` 并停止横屏重力强转，full compat 同步 Godot `ScreenOrientation.Portrait`。需要用户自行安装并启用竖屏 UI MOD，不检测、下载或自动启用 MOD。Launcher/工具 Activity 的既有方向策略不变；竖屏画布协调只由更新后的 full compat 提供，offline bootstrap 不包含显示布局补丁。
+  - 暴露 `launchGameSettingsFromGame()`、`restartToSettingsFromGame()`、`showSoftKeyboardFromOverlay()`、`getGodotDataDir()`、`getSelectedGameDir()`、`getSelectedAccountRootDir()`、`getSelectedModsDir()`、`getSelectedLaunchContextJson()`、`getSelectedCompatPackDir()`、`getSelectedCompatOverlayPck()` 等静态桥给 C# 兼容层。
+  - 音量上键与快捷面板的软键盘入口统一通过 `GodotKeyboardBridge` 复用 Godot AAR 已创建并绑定 `GodotTextInputWrapper` 的透明 `GodotEditText`，调用 `GodotIO.showKeyboard()` 时保留当前文本、光标/选区、输入类型和长度限制；不得重新退回对渲染 `SurfaceView`、普通焦点 View 或 DecorView 直接调用 `InputMethodManager.showSoftInput()`，这些 View 没有游戏文本输入所需的 `InputConnection`。只有 resumed + focused + Godot input ready 时才消费音量上键；桥不可用时让系统继续处理音量。软键盘实际发送的 F1–F12 非文本 `KeyEvent` 由 `GodotEditText` 的窄监听器直接转交 `GodotInputHandler`，不把功能键伪装成字符串，也不创建新的 Godot `TextEdit`/无绑定 Android `EditText`。
+  - 可选**应用内**快捷面板（非系统悬浮窗，不需 `SYSTEM_ALERT_WINDOW`）：设置 `android_in_game_overlay_enabled`（默认关）后在 `GodotApp` 上叠可拖动、自动贴边且避开 system bars/display cutout 的“快捷”胶囊入口；点击打开从左侧滑入的无标题快捷抽屉，宽度约占可用屏幕 40%，左侧为竖向图标页签，右侧暗色空白区和系统 Back 都会先关闭抽屉，触控目标至少 48dp。快捷页在开发者工具开启时用带图标的 MD 卡片展示当前 profile、payload 与 compat，不再输出 `profile=...` 纯文本；并提供打开附加设置、打开软键盘（与音量上键共用 `showSoftKeyboardForGame`）、重启游戏进程、存档快照、退出启动器、热设置子集、实时日志（优先 `godot.log` 其次 `sts2.log`）。日志页使用 `RecyclerView` 行列表复用，日志正文按等级着色，右侧提供顶部、底部、默认开启的自动贴底和筛选齿轮按钮，日志源/等级按钮组（`V/D/I/W/E`）与搜索框默认隐藏，点齿轮后显示且启用项背景高亮。从附加设置返回后会按当前开关拆除或重建入口。开发者工具 `android_dev_tools_enabled` 开启后显示专业化检查器：Runtime 页浏览 STS2/compat C# 根对象；Scene 页 scene tree 默认全折叠，每行只显示较大的节点名和按类型字符串稳定散列着色的节点类型，自定义类型只显示 managed type；树缩进区用自绘线段和加减框连接层级，只有 tree 列表超宽时外层 `HorizontalScrollView` 才处理横向滚动，进入 Node/Godot 对象后列表强制测量为父容器可用宽度且不可横向滚动，点击左侧按钮/缩进区展开收起，点击正文进入 Node，不再保留右侧进入按钮。Node 顶部标题和固定信息不显示长 Path；Node/Godot 自定义对象属性以 `ToString()` 风格预览并可继续嵌套下钻。不可编辑且不可下钻的信息点击或点右侧复制图标会写入剪贴板并提示复制值。顶部操作统一为等尺寸图标按钮且只在可返回时显示返回键。`android_dev_inspector_writable` 控制是否允许写入简单值和执行临时 GDScript（变量 `root` / `tree` / `node`）；GDScript 非 Nil 返回值由可选中、可复制的结果 Dialog 展示，无返回值只提示执行完成。写入/脚本操作审计到 `<files>/logs/dev-tools.log`；不提供独立 Node 方法调用入口。GodotApp 的 DeviceDefault theme 上创建 Material 对话框时必须用 `Theme.Sts2ExtraSettings` 的 `ContextThemeWrapper`，不可直接传 activity。检查器只由当前 full compat 的 `DevToolsHost` 提供，offline bootstrap 或旧完整包会显示可操作的不可用提示；Host 独立于其他 feature patch 启动，使用 `<files>/launcher/devtools/host.json` ready marker 及 protocol 2 的原子 `response-<uuid>.json`，Java 仍可读取旧 `response.json`，只读请求在 host 存活而超时时最多重试一次。
+  - 维护当前 profile 的 `logs/godot.log` 与 `logs/android-launch.log`；应用内 logcat 统一采集到全局 `<files>/logs/sts2.log`，每次启动游戏时像 `godot.log` 一样归档旧 `sts2.log`。`sts2.log` 使用紧凑 `level tag message` 格式并遵循附加设置 `log_level`（off/info/debug/very_debug）；选择 `off` 时完全禁用 `godot.log` 与 `sts2.log`。`sts2.log` 只能抓到普通 app 可见的自身 UID/进程相关 logcat，完整设备级日志仍需 ADB。
+- 启动路径：
+  1. `GameSettingsActivity.launchGame()` 检查当前启动配置绑定的 payload 是否 ready；配置存在但本体缺失时不 fallback 到旧 `<files>/game/`，而是提示用户重新导入、下载、切换或编辑启动配置。
+  2. 如果兼容包开关关闭，启动前弹出风险确认；用户选择继续后，准备流程会删除 staged `STS2Mobile.dll` 与 `<files>/port_compat.pck`，真正按无兼容层路径启动。若用户选择开启，则写回 `android_compat_pack_enabled=true` 后取消本次启动。
+  3. 如果兼容包开关启用，只读取当前启动配置的 `compat_pack_id` / `compat_target_id`；未选择、包已删除或 schema 2 target 缺失时先等待 bundled 安装 bootstrap，再弹出推荐 Bottom Sheet。推荐严格按“命中的内置/已安装 full target → 无 full 命中时的可用 offline wildcard”分层；用户点“使用推荐”后才写回当前 profile 并继续启动，也可进入兼容包管理。版本不匹配仍弹窗提示。
+  4. 后台执行 `GameLaunchPreparationManager.prepareForLaunch()`。
+  5. 以 `launch_prepared=true` 启动 `GodotApp`；`GodotApp` 仍保留 fallback 准备路径防止直接启动遗漏，但同样尊重兼容包开关，关闭时不会 fallback 复制 `STS2Mobile.dll`。
+
+## 7. Payload / 版本管理
+
+`PayloadManager` 负责本地游戏 zip 导入：
+
+- 支持 SAF 选择 zip 与 assets 内置 `payload/SlayTheSpire2.zip`。
+- zip 必需文件：
+  - `SlayTheSpire2.pck`
+  - `release_info.json`
+  - `data_sts2_windows_x86_64/sts2.dll`
+  - `data_sts2_windows_x86_64/sts2.deps.json`
+  - `data_sts2_windows_x86_64/sts2.runtimeconfig.json`
+- 导入流程：复制到私有临时文件并计算 sha256 → 安全解压到 staging → 校验 PCK magic 与必需文件 → 对私有 PCK copy 做 length-preserving Sentry metadata patch → 写 `.payload_manifest.json` → 按 version/commit/hash 生成 payload id → 原子安装到 `<files>/payloads/<payload_id>/game/`。PCK patch schema 2 同时识别旧 `SentryInit` 与 v0.110.0 的 C# `SentryBootstrap` autoload；旧 APK 留下的 schema 1 记录在升级后必须重新扫描并刷新 manifest PCK SHA，不能仅因已有 `pck_patches` 对象就跳过。
+- 安全措施：Zip Slip canonical path 防护、单一顶层目录 payload zip 自动展平、backup/rollback、取消控制、旧 scratch 清理。
+- 导入成功后会尝试：
+  - `LaunchProfileManager.createOrSelectDefaultProfileForPayload()`：创建/选择绑定该 payload 的启动配置；默认配置使用全局存档和全局 MOD，并在创建时按版本填入推荐兼容包；用户可在“版本”页新建/编辑配置来改兼容包或改为隔离配置。
+  - `CompatPackManager.findBestMatch()`：按 dll sha/version 为新建/编辑启动配置提供推荐兼容包或 schema 2 target variant；启动时不会再覆盖已有配置的 `compat_pack_id` / `compat_target_id`。
+  - 旧 `<files>/game/` 与 `<files>/game-versions/<id>/game/` 会在启动器 bootstrap 时尽量通过 rename 迁移到 payload store，避免大文件复制。
+
+应用私有目录约定：
+
+```text
+<files>/payloads/<payload_id>/game/         # 不可变导入游戏 payload
+<files>/payloads/<payload_id>/game/.payload_manifest.json # 导入 manifest，含 release_info / dll sha / pck patch 记录
+<files>/instances/<profile_id>/instance.json # 启动配置，绑定 payload/compat/save/mod 模式；schema 2 可含 compat_target_id
+<files>/instances/<profile_id>/default/<account>/settings.save # 隔离存档/设置目录
+<files>/instances/<profile_id>/mods/        # 隔离普通用户 MOD 目录
+<files>/instances/<profile_id>/logs/        # profile 日志目录：godot.log / android-launch.log
+<files>/steam/downloads/payload-<fingerprint>/ # SteamPipe 本体稳定任务目录与 *.steam.part 续传数据
+<files>/steam/downloads/locks/payload-download.lock # 本体下载+安装全局独占锁（锁文件本身可长期保留）
+<files>/workshop/downloads/                 # Steam Workshop 下载 staging / metadata / download.log；导入成功或每日维护会静默清理
+<files>/workshop/library/index.json         # 已导入 Workshop item 的 PublishedFileId / 分支 / manifest 解析来源 / item 根目录 / 更新时间 / MOD ID 记录
+<files>/steam/cloud/<profile_id>/           # Steam Cloud manifest、baseline、备份与诊断
+<files>/webdav/cloud/<slot>/                # WebDAV manifest、baseline、备份与诊断
+<files>/automation/                         # ADB 自动化调试 token、inbox、runs/result；本地测试数据
+<files>/save-snapshots/profiles/<profile_id>/ # 本地存档快照 zip，默认保留最近 5 个
+<files>/compat-packs/<pack_id>/             # 已安装 Android 兼容包；schema 2 在 variants/<target_id>/ 下放 dll/pck
+<files>/launcher/selected_instance.json     # 当前启动配置解析结果
+<files>/launcher/selected_game_version.json # legacy 兼容诊断记录，指向当前 payload
+<files>/launcher/selected_compat_pack.json  # 当前启动配置解析出的兼容包诊断记录
+<files>/default/<account>/settings.save     # 全局存档/设置目录，默认 account=1
+<files>/mods/                              # 全局普通用户 MOD 目录
+<files>/.config/                           # HOME=<files> 下的应用级 MOD 自有配置/日志，不自动按 profile 隔离
+<files>/tmp/                               # native TMPDIR/TMP/TEMP 与 Java java.io.tmpdir
+<files>/.godot/mono/publish/arm64/          # Godot/Mono publish 目录
+<files>/port_compat.pck                    # 启动前 staging 的当前兼容包 overlay
+<files>/logs/                              # legacy/global 日志 fallback 与统一应用内 logcat：sts2.log
+```
+
+原生目录环境由 `AndroidRuntimeEnvironment.configure()` 在 `Sts2Application.onCreate()` 中、Godot/Mono 之前初始化；启动准备与 `GodotApp.onCreate()` 保留同一入口兜底。`HOME` 固定为应用私有 `<files>`，先创建并写探测 `.config`，HOME/temp 初始化独立且串行幂等，失败部分可重试，不能让 HOME 失败阻断既有 Harmony temp。当前打包的 Mono `ApplicationData` 使用 `HOME/.config`，不读取 `XDG_CONFIG_HOME`，且缓存环境与特殊目录；不得仅改 Java system property、等用户 MOD `.cctor` 失败后才改 HOME，或按 profile 在同一进程反复切换 HOME。这是通用启动环境兼容，不修改 Colorless Run 等普通 MOD DLL；MOD 自有 `.config` 数据应用级共享，不自动进入隔离存档/快照/云同步。回归：`AndroidRuntimeEnvironmentTest`（非法继承 HOME、已有文件阻挡 `.config` 时保留 temp/文件并可重试）。
+
+## 8. 兼容包 / port-mod submodule
+
+### 8.1 submodule main、target matrix 与工作方式
+
+`port-mod/` 是 submodule，不要把它当父仓库普通目录直接混合提交。常用检查：
+
+```bash
+git submodule status
+git -C port-mod status --short --branch
+git -C port-mod branch -a
+tools/git/report-heads.sh
+```
+
+切换或更新时注意：
+
+- 修改兼容层源码时默认在 `port-mod/main` 上工作；确认当前 checkout 是 `main`，不要把普通共用功能继续落到某个 `compat/*` 版本分支。
+- 兼容层改动要在 submodule 仓库内提交，再在父仓库更新 submodule 指针。
+- 默认 `tools/android/stage-bundled-compat-packs.sh` 不切分支，直接从 `port-mod/main` 的 active target matrix 构建 schema 2 family 包。
+- 仅在 `COMPAT_PACK_BUILD_MODE=legacy` 时，stage 脚本才会为非当前 legacy 分支创建临时 worktree 到 `.agent/worktrees/compat-packs/`，避免旧分支补丁互相污染；当前 checkout 若正好是某个 legacy 分支且有未提交改动，脚本会用 dirty worktree 构建对应 legacy 包，便于本地诊断。legacy worktree 会从当前共享源码列表注入跨版本热修；新增 `ModEntry.cs` 直接引用的源码文件时必须同步加入该列表，当前列表需包含 `DevTools/*.cs`、`RunHistoryPatches.cs`、`CombatAnimationWarmupPatches.cs`、`ExtendedMultiplayerRoomPatches.cs`、`MobileReactionButtonPatches.cs`、`MobileReactionVisibilityPolicy.cs`、`MobileReactionPointerState.cs`、`MobileReactionWheelPlacement.cs` 与资源释放保护所需的 `AndroidAssetCacheLifecyclePatches.cs`。
+  资源安全热修的 legacy 注入还必须包含 `UiScalePatches.cs`、`CombatBackgroundPatches.cs`、`EventLayoutPatches.cs`、`MobileLayoutPatches.cs`、`LifecycleAndPerformancePatches.cs`、`LearnedWarmAssetStore.cs` 与 `AndroidParticlePreprocessPatches.cs`，保持所有 legacy 包的节点订阅、load-only gate 和学习缓存协议一致。
+  表情入口的 legacy 注入同时必须包含 `MobileReactionSurfaceTracker.cs`，不能回退每 250ms 全树递归扫描的旧显示检查。
+  稳态热路径热修的 legacy 注入还必须包含 `IntentAnimationPatches.cs`、`TouchInputPatches.cs` 与 `AndroidInputCompatPatches.cs`。Tooltip 默认模式在逐帧追踪前返回，长按追踪复用弱引用，详情祖先分类在 owner 退出树后失效，显示切换按 owner/tip 身份幂等；不能破坏按压期间 `Clear()`/重建的计时和详情页豁免。意图动画使用 Harmony 字段注入，优先复用原版帧列表，旧 API 只惰性缓存当前实例的当前动画；不得改变现有 24 FPS/浮动效果或把纹理缓存永久静态化。输入先过滤事件，表情输入仅在活动按压期间绑定当前按钮/游戏，退出树或取消时解除。回归：`port-mod/tests/MobileHotPath.Tests`，使用打包 runtime 的 `HarmonyReferenceDir`，分别运行默认形状与 `-p:LegacyIntent=true`。
+  启动预热已回退到 `cb3f030` 引入后台加载之前的同步逻辑，legacy 注入保留 `LifecycleAndPerformancePatches.cs` / `AndroidStartupLoadingScreen.cs`，不再注入已删除的 `AndroidResourcePreloader.cs`。通用/主菜单和学习缓存/实战补全资源在 Godot 主线程使用 `ResourceLoader.Load`，每处理 8 项（包括缓存命中）让一帧；VFX 同步加载、实例化、释放并逐项让帧，进树预热仍等待既定渲染帧。不改预加载范围、开关、缓存保护、画质或玩法，不添加 `Task.Run` 场景操作；单个同步加载仍可能暂时阻塞。游戏过程中原版 `AssetLoadingSession` 的异步加载及下述 2ms 帧预算不回退，预算 helper 由 `RuntimeAssetLoadingPatches` 自己持有。Shader 兼容在 `NGame._Ready` 后按开关订阅单节点 `SceneTree.NodeAdded`，同批节点在整个父子 `_Ready` 栈结束后的 idle 回调合并处理；关闭时退订并清空待处理引用，设置变更由 canonical display apply、游戏内开关和 DevTools apply 同步刷新。禁止恢复 `Node.AddChild`/`AddChildSafely` 双重递归扫描；初始/启用时才允许一次索引遍历。原版材质不原地修改，每节点副本隔离，卡面 mask shader 仍排除。回归 `port-mod/tests/FramePreparation.Tests` 使用官方 Godot 4.5.1 .NET 引擎及真实 ResourceLoader，不含商业代码；Linux Ekyso Harmony 需要 `LD_PRELOAD=libgcc_s.so.1`，该依赖仅用于本机验证。
+  三项运行时优化的 legacy 注入还必须包含 `CombatVfxPoolPatches.cs`、`RuntimeAssetLoadingPatches.cs`、`AndroidFontSizeScaler.cs`。VFX 池只保留当前战斗房间正常播放结束的原版伤害数字/命中火花/小刀/大斩击/火焰爆发，空闲上限分别为 16/8/8/2/2；超额仍创建完整特效，不改数量、时序、伤害或网络。新增 `NBigSlashVfx` / `NFireBurstVfx` 只接入已核对的粒子树及 Task/CTS 合约，不扩通用快照节点白名单、不自动枚举其他 VFX、不接管卡牌/角色/Spine/动画播放器或启动预热备件，不改预加载范围或 GC。租约通过原版 async 播放方法的 ExecutionContext 隔离，旧 continuation 不得释放新租用对象；外部移除走原版销毁，离房释放全部空闲实例。只接受已知节点形状，带未知子脚本或其他 Harmony owner 修改工厂、生命周期、ApplyTint/ModulateParticles 时不复用。小刀染色材质每实例独立持有，斩击/火焰保持节点 SelfModulate 染色；正常归还后停发射并关闭旧 CTS，重租恢复原始视觉状态后重新 Ready、Restart 粒子并创建新 CTS。Godot StringName 必须到 NGame Ready 后才创建。原版 AssetLoadingSession 在出队之前共享约 2ms 的协作时间预算，各阶段最多 8 项；不伪造空队列，不改完成/错误处理、原版在途上限或 VFX 串行语义。字体缩放固定缓存 StringName 元数据键，默认 100% 不新增无用 override，相同值不重复写；保留字号基准、恢复路径、自动字号和语言 fallback。FramePreparation 原生回归覆盖三项边界与新增两族的状态复位、CTS、租约迟到、2 槽满溢和脚本/tint opt-out，`STS2_FRAME_REFERENCE_DLLS` 可提供分号分隔的原版 DLL 路径，仅做只读 Cecil 合约检查，不执行游戏程序集。
+  商店缩放热修的 legacy 注入必须包含 `MerchantLayoutPatches.cs`；打开动画按商品面板的 `AnchorTop` 与商店当前 Control 高度插值锚点偏移，不能用根窗口 `ContentScaleSize.Y` 代替实际可用高度，也不能恢复固定绝对 Y 目标，否则 `global_scale > 100%`、组合缩放或动画中改缩放会再次把底排推出屏幕。保留原版商品尺寸、购买行为和动画曲线，不修改全局 ContentScale 或渲染分辨率。
+- flat matrix 模式下，通用源码改动只在当前 checkout 上维护；版本差异优先放入 `port-mod/targets/active/<target_id>/target.json`、target capabilities/adapter 或极少量条件编译，不再为普通共用功能复制到多个分支。停止内置某个早期版本时，把对应 target 移到 `targets/archived/`，默认 matrix 构建会跳过它。
+
+### 8.2 构建入口
+
+- 当前 checkout legacy fallback 构建：
+
+```bash
+tools/android/build-port-mod.sh
+```
+
+默认 `REFERENCE_FLAVOR=original-v0.111.0`，用于当前独立 v0.111.0 public-beta target；共享 v0.110.x / v0.109.x 仍可分别用历史 `original-v0.110.0` / `original-v0.109.0` flavor 显式构建，并解析到 v0.110.1 / v0.109.1 引用。脚本会：
+
+1. 使用 `.env` 中的 `DOTNET_BIN` 编译 `port-mod/STS2AndroidPortCompat/STS2Mobile.csproj`，并按 `ReferenceFlavor` 传入对应 `CompatReferenceDir`。
+2. 写入 build metadata（branch/commit/dirty/timestamp）。
+3. 复制输出到 `android/assets/dotnet_bcl/STS2Mobile.dll` 作为 fallback。
+4. 运行 `tools/android/make-port-overlay-pck.py` 生成 `android/assets/port_compat.pck`。
+
+- 构建当前 checkout 的 schema 1 独立兼容包（legacy/诊断用）：
+
+```bash
+cd port-mod
+./tools/build-compat-pack.sh
+```
+
+- 构建全部内置兼容包并复制到 APK assets：
+
+```bash
+tools/android/stage-bundled-compat-artifacts.sh
+```
+
+APK 默认使用统一 staging 入口，输出 gitignored 的 `android/assets/compat_packs/sts2-android-compat.zip` 和 `android/assets/compat_packs/sts2-android-offline-bootstrap.zip`。full compat 包仍可单独构建：
+
+```bash
+tools/android/stage-bundled-compat-packs.sh
+```
+
+`stage-bundled-compat-packs.sh` 默认 flat matrix 模式读取 `port-mod/targets/active/*/target.json`，调用 `port-mod/tools/build-compat-matrix.sh`，从当前 checkout 依次用对应 `ReferenceFlavor` 编译，并输出一个 schema 2 `sts2-android-compat.zip` family 包。`offline-bootstrap/tools/build-offline-pack.sh` 会先调用 `offline-bootstrap/tools/test-offline-contract.sh`，用 synthetic API 形状与本机已配置的 original references 验证反射合约，然后构建 schema 2 `sts2-android-offline-bootstrap.zip`。该测试只动态读取 `sts2.dll`，不改变 offline bootstrap 的静态引用边界。APK 启动时 `CompatPackManager.installBundledCompatPacks()` 会把打入 assets 的这些 zip 安装到 `<files>/compat-packs/`。
+
+legacy 分支模式只在需要对照旧发布包或回退诊断时使用：
+
+```bash
+COMPAT_PACK_BUILD_MODE=legacy tools/android/stage-bundled-compat-packs.sh
+```
+
+可在 submodule 内单独调试：
+
+```bash
+cd port-mod
+./tools/build-compat-matrix.sh --target v0.111.0
+./tools/build-compat-matrix.sh
+```
+
+### 8.3 compile gate
+
+检查是否误依赖旧 Android port 改过的 `sts2.dll`，请使用对应原版引用：
+
+```bash
+# v0.103.x 正式/稳定
+REFERENCE_FLAVOR=original tools/android/build-port-mod.sh
+
+# v0.106.1 beta（旧测试）
+REFERENCE_FLAVOR=original-v0.106.1 tools/android/build-port-mod.sh
+
+# v0.108.0 正式/稳定（当前稳定版）
+REFERENCE_FLAVOR=original-v0.108.0 tools/android/build-port-mod.sh
+
+# v0.111.0 当前 beta
+REFERENCE_FLAVOR=original-v0.111.0 tools/android/build-port-mod.sh
+
+# v0.110.x 旧 beta（稳定 target id 仍为 v0.110.0）
+REFERENCE_FLAVOR=original-v0.110.0 tools/android/build-port-mod.sh
+
+# v0.109.x 旧 beta（历史 flavor 名，引用使用最新 v0.109.1）
+REFERENCE_FLAVOR=original-v0.109.0 tools/android/build-port-mod.sh
+
+# v0.107.1 正式/稳定
+REFERENCE_FLAVOR=original-v0.107.1 tools/android/build-port-mod.sh
+
+# v0.107.0 beta（旧测试）
+REFERENCE_FLAVOR=original-v0.107.0 tools/android/build-port-mod.sh
+
+# 或裸跑 dotnet 时显式传入 .env 中配置的引用目录
+"$DOTNET_BIN" build port-mod/STS2AndroidPortCompat/STS2Mobile.csproj \
+  -p:ReferenceFlavor=original-v0.111.0 \
+  -p:CompatReferenceDir="$STS2_ORIGINAL_V1110_REFERENCE_DIR" -v:q
+```
+
+`ReferenceFlavor=runtime`（默认 MSBuild 属性）引用旧 launcher runtime，适合快速编译；正式兼容分支应通过对应 original gate。
+
+### 8.4 runtime 加载概要
+
+正常启动前，Java shell 会：
+
+1. 复制 APK `dotnet_bcl` runtime 到 `<files>/.godot/mono/publish/arm64/`。`MonoMod.Utils.dll` 必须在 BCL 缓存命中返回前按 APK 实际内容校验并原子刷新，不能只看 versionCode/compat stamp/长度/mtime；同版本覆盖安装也必须清除旧原生布局写入，兼容包关闭时同样执行。内容相同不重写。
+2. 兼容包开关开启时按当前启动配置的 `compat_pack_id` / `compat_target_id` 复制 `STS2Mobile.dll` 到 publish 目录；selected compat DLL 的复用判断必须比较实际文件内容，不能只依赖长度和 mtime，因为 schema 2 不同 target 的 DLL 可能同尺寸且 publish 副本时间更新；复制后还要校验目标内容与当前 variant 一致。关闭兼容包开关时删除该 dll，且 `GodotApp` fallback 不会再从 selected pack 或 APK asset 强制补回。
+3. 兼容包开关开启时复制当前启动配置兼容包/target 的 `port_compat.pck` 到 `<files>/port_compat.pck`；关闭时删除 `<files>/port_compat.pck`。无选择时使用 `android/assets/port_compat.pck` fallback（正常 launcher 启动会先阻止缺包场景）。
+4. 复制当前 launch profile payload 目录 `<files>/payloads/<payload_id>/game/data_*/*` 到 publish 目录，但保护 BCL/System/GodotSharp 等 runtime DLL 不被 payload 覆盖；profile/payload 切换时会清理旧游戏 assembly 残留。
+5. patched Godot runtime 加载 `STS2Mobile.dll` / `STS2Mobile.ModEntry`，调用 `InitializeGodotSharp` 与 `Apply`；`Apply` 会先配置 Android 私有 temp，并通过 `HarmonyAndroidCompat` 在真正的 `MonoMod.Utils` / `MonoMod.Core` 程序集上强制 Android/Mono 后端，避免 HarmonyOS 等 ROM 被 MonoMod 误判为 Posix/Linux 后在 Harmony `UpdateWrapper` 中抛 `NotImplementedException`。默认路径贴近 `../s2` 的 minimal bootstrap，不启用旧 native resolver / `DMDType=cecil` override；`monomod_android_libc_shim` 仍由 AndroidSystem 按需用于指令缓存刷新和 `/proc/self/mem` executable-page patch fallback。`HarmonyMethodReferenceImporterShim` 会在后续大量 Harmony patch 前自检 `MMReflectionImporter` 是否丢失 STS2 方法引用上的 required/optional custom modifiers，必要时仅对带 modifiers 的 `sts2` 方法导入安装极窄 postfix 原地修正，避免普通 MOD patch 原方法体时生成无法绑定的动态 `MemberRef`。`EarlyLocalizationFallbackPatches` 会在普通 MOD 加载前保护 `LocString.GetFormattedText()`：Android/Mono 若在 MOD `PatchAll` 阶段提前运行游戏 UI 类型静态构造、且 `LocManager.Initialize()` 尚未执行，只临时返回稳定 fallback 文本，初始化完成后停止吞异常，避免 `NPotionHolder` 这类类型被永久标记为 cctor 失败。`DeferredModPatchQueue` 会在普通 MOD initializer 窗口同时拦截 direct `PatchProcessor.Patch()` 与 Ekyso Harmony `PatchAll()` 实际经过的逐目标 `PatchClassProcessor.ProcessPatchJob()`；把目标为 `sts2` 程序集 Godot/UI 类型、带静态初始化器的模型及静态初始化会读取模型内容/消费池的资源类型（UI 如 `MegaCrit.Sts2.Core.Nodes.*`、`MegaCrit.Sts2.addons.*`，且存在静态初始化器）的用户 MOD patch/job 排队，等 `ExecuteEssential` 中 `LocManager.Initialize()`、`ModelDb.Init()`、`ModelIdSerializationCache.Init()`、`ModelDb.InitIds()` 以及原版网络 `MessageTypes.Initialize()` / `ActionTypes.Initialize()` 完成后再按原全局顺序重放，避免 Android/Mono 在 very-early 阶段 patch 这些 UI 类型时提前执行 `.cctor`。PatchAll 延迟必须保留原始 processor/job，使 Harmony ID、prefix/postfix/transpiler/finalizer/inner patch 列表和逐目标 prepare/cleanup 语义不被手工重建丢失；同一 patch class 的无危险静态初始化的安全 target 仍立即应用，单个 deferred job 失败只记录且不阻断后续队列，replay 只执行一次。Android 接管 `ExecuteEssential` 时不能漏掉网络类型表初始化，否则原版单人战斗结束写 `CombatReplay` 也会因 `INetAction` 无法映射 ID 而失败。若 MOD 因 Android 早期原版模型占位误判 ModelDb 已初始化并提前调用 `AbstractModel.InitId()`，兼容层只在 `ModelIdSerializationCache.Init()` 前跳过该早调用，后续 `ModelDb.InitIds()` 会统一完成排序 ID 初始化。早期初始化不得调用 Godot C# API；Harmony self-test 仅在 `<files>/launcher/enable_harmony_selftest.flag` 存在时运行，旧 bootstrap 仅在 `<files>/launcher/enable_old_harmony_compat_bootstrap.flag` 存在时作为诊断启用。
+   - method modifier 修复必须保留原 `MethodInfo`、`call` / `callvirt`、instance/struct calling convention 及 Cecil generic parameter；同时守住 `MMReflectionImporter.ImportReference(MethodBase, ...)` 和 `CecilILGenerator` 的实际 MethodBase 导入 helper，且重复经过两层时保持幂等。禁止把 init-only setter 全量替换为运行期反射 shim，否则会改变 callvirt 语义并把反射、装箱和数组分配带入出牌等游戏热路径。回归入口：`port-mod/tools/test-harmony-method-reference-importer.sh`。temp 最终兜底可使用 `AppPaths.DataDir/tmp`，但只能在环境、runtime temp、publish 路径、HOME 与 ANDROID_DATA 候选全部失败后惰性解析，并继续经过写探测。
+   - `AndroidFontCoveragePatches` 在 `NGame._Ready` 后通过原版 `FontManager` 为当前语言装配显式 fallback：控件保留基础字体及既有 fallback，追加游戏自带本地化字体；并覆盖独立 Window/PopupMenu 主题字体（含 `OptionButton.GetPopup()` 下拉项和分隔行字体），解决部分三星 ROM 上下拉中文仍显示方框的问题。后续节点只通过 `SceneTree.NodeAdded` 处理，不得在热 `Node.AddChild` 路径增加递归扫描；不得把重复 CJK 字体打入 overlay。
+   - `MobileReactionButtonPatches` 在 `NGame._Ready` 后补入 PC payload 缺少的移动端表情入口，并直接监听 `NReactionContainer.InitializeNetworking()` / `DeinitializeNetworking()` 刷新显示。Android 判定必须同时接受 `OS.HasFeature("mobile")` 与 `OS.GetName()=="Android"`，因为导入 PC PCK 的真机运行日志可能已确认 Godot Android 平台但缺少 mobile feature tag。`STS2Mobile.csproj` 使用普通 `Microsoft.NET.Sdk`，不会像游戏的 `Godot.NET.Sdk` 那样生成自定义 Godot 节点虚回调分发胶水；动态按钮必须显式连接 `Control.gui_input` 处理按下、连接原生 `Timer.timeout` 做低频显示/取消检查，并由原版 `NGame._Input` Harmony postfix 转交活动指针的拖动与释放，不能依赖兼容类 `_GuiInput` / `_Input` / `_Process` override。触摸 `Position` 属于 viewport 坐标，按钮视觉中心必须用 `GetGlobalTransformWithCanvas()` 计算；轮盘必须把目标中心逆变换到其父 CanvasItem 再修正 `Position`，不得恢复 `GlobalPosition + Size/2` 或 `GlobalPosition = center - Size*Scale/2` 这类 canvas/viewport 混算。发送也必须先把 viewport 中心通过 `NReactionContainer.GetGlobalTransformWithCanvas()` 的逆变换转换为 reaction container control-space 位置，再调用原版 `DoLocalReaction`；否则本地 `NReaction.GlobalPosition` 与 `ReactionSynchronizer` 归一化会采用错误坐标，缩放布局下可能完全看不到已发送表情。原版 wedge 的 `_defaultPosition` 在 `_Ready()` 缓存，响应式 ContentScale/父 Control 尺寸随后变化时会成为右下方旧基准；移动入口首次显示必须捕获八项的实时中性 `Position`、轮盘尺寸、anchor 和默认颜色，按当前尺寸重算中性位置并写回 `_defaultPosition`，显示/隐藏时终止旧 tween 并立即复位，避免转完一圈后所有 wedge 整体漂移，同时保留原版 25px 径向选中动画。显示日志记录 `os/mobile_feature/setting/network_ready/reaction_available/scene/position/size`，交互日志记录 press、wheel show 的请求/实际中心、alignment error、payload 默认位置差值、wedge reset、release/react，以及 dispatch 的 texture/viewport/control position/network ready 和失败。发送仍只能复用原版 `NReactionContainer` 同步器，不得新增 Android 私有消息。
+     表情入口的 250ms 显示轮询不得递归扫描当前场景或 overlay。`MobileReactionSurfaceTracker` 随按钮生命周期建立一次已进树的已知大厅/等待控件索引，之后只通过 `SceneTree.NodeAdded` / `NodeRemoved` 增量维护；初次遍历用 `GetChildCount` / `GetChild`，名称使用缓存 `StringName` 比较并及时释放临时名称 wrapper，禁止周期性 `GetChildren()` 数组/名称 wrapper 分配。轮询只检查候选节点是否属于当前 scene/overlay 及 `IsVisibleInTree()`，隐藏祖先必须使候选失效。禁用 `show_mobile_emoji_button`、非 mobile runtime 或按钮退出树时停止追踪并清空引用，重启/重新进树时重新 seed；不得为省开销删除单人隐藏、大厅和等待界面的功能规则。回归入口：`port-mod/tests/MobileReactionButton.Tests/MobileReactionButton.Tests.csproj`。
+7. `ModLoaderPatches` 接管原版 `ModManager.Initialize()`（`v0.107.0` 起原方法返回 `Task`，Android replacement prefix 跳过原方法时必须返回 `Task.CompletedTask`；`v0.107.1` 起原版用 `ModManager.State` 取代旧 `_initialized`，兼容层需反射写入 `Initialized` 并保留旧字段 fallback），扫描当前 launch profile 的 `AppPaths.ModsDir`（全局 `<files>/mods` 或隔离 `<files>/instances/<profile_id>/mods`），跳过 Steam Workshop，并处理 `mod_manifest.json` → `<ModId>.json` manifest alias；**加载任何 MOD 之前只在 shadow registry 中准备仅原版模型占位**（`AbstractModelSubtypes.All`），vanilla `Get<T>()`、`Get(Type)`、`GetById<T>` / `GetByIdOrNull<T>` 和类别 getter 的按键读取可得到同一 shadow 对象，但 canonical `ModelDb._contentById` 保持 pre-init，直到 phase 1 才发布，避免 Android/Mono 下 MOD initializer Harmony patch getter（如 HextechRunes patch `UnlockState.Relics`）或 MOD 静态构造引用原版模型时崩溃，同时不把 `ModHelper.AddModelToPool` 误判为 too late；原版类型不带命名空间前缀，提前算 ID 不会污染 YuWanCard/BaseLib 的 `GetEntry` 前缀缓存。**不对 MOD 模型类型提前算 ID**，MOD 占位延迟到 phase 1；若 MOD 因早期 shadow 占位误判 ModelDb 已初始化而过早调用 `AbstractModel.InitId()`，`ModelDbInitPatch` 会在序列化 cache 就绪前跳过该次调用，避免 `EVENT` 等 category 尚无 net ID 时崩溃。调用每个 MOD 的 `TryLoadMod` initializer 期间会短暂开启 `ModelDb.Contains(Type)` shield：只对非原版程序集类型隐藏“早期原版 shadow 占位”导致的重复命中，避免 RitsuLib/Valencina 这类 MOD 在注册前构造与原版同名模型（如 `Taunt`）时因 Android 占位和 PC 时序差异误报 `DuplicateModelException`；同一窗口也会开启 `DeferredModPatchQueue` 的用户 MOD patch 捕获，延后有危险静态初始化的 UI、模型和读取模型内容/消费池的资源 target，但保留 `ModelDb.Init` hook、ID 计算和安全注册的原时序；原版类型、MOD phase 1 后和真实重复检查仍保持可见。
+8. `QuickRestartPatches` 在 pause menu 提供 Android 内置“重打/Retry”按钮；快速重开会先等待当前 run save 任务，淡出后执行原版保存恢复入口（`RunManager.SetUpSavedSinglePlayer()`，`v0.107.0` 为 `SetUpSavedSingleplayer()`；返回 `Task` 的版本会等待完成）以完整初始化新 run 的 `NetService` / `MapSelectionSynchronizer` 等同步器后再调用 `NGame.LoadRun()`，并在淡出后失败时尝试 `FadeIn()` 恢复可见画面，避免关闭/跳过运行时预加载时因 async 时序竞态卡黑屏。
+9. `MobileTooltipPatches` 通过 `NHoverTipSet.CreateAndShow/Remove/Clear/_Process`、owner `GuiInput` 和 `NGame._Input` 管理移动端 tooltip 显示；附加设置“设置 → 操作 → Tooltip 显示”默认 `mobile_tooltip_mode=immediate` 保持 PC 端悬停即显示，也可切换为 `long_press`（同一触点按住约 1 秒后临时显示，松手/明显拖动后隐藏）或 `hidden`。该补丁在 `CreateAndShow*` 前建立长按计时，允许原版 tooltip 创建并完成对齐后再隐藏；若原版在长按过程中频繁 `Clear()`/重建 hover tips，会保留当前 owner/计时状态，避免计时被每帧重置；游戏内设置页切换到 hidden/long_press 会立即移除已有普通 hover tooltip。inspect card/relic/potion 等显式详情页面不受隐藏策略影响。
+10. `LanMultiplayerPatches` 由 `lan_multiplayer_enabled`（附加设置“设置 → 系统 → 本地联机补丁”）作为主开关；关闭后会跳过 STS2Mobile 自带的所有本地 LAN patch（无 Steam LAN join/host、最大人数可见性、玩家 ID/名称与多人读档 ID 修正等）。补丁延迟到主菜单后应用，若检测到普通 MOD 中已加载 `sts2_lan_connect` / STS2 Game Lobby 大厅 MOD，也会自动整组跳过，避免 Android LAN host/join 适配和大厅 MOD 的 `legacy_4p` / `extended_8p` 协议 profile 叠加冲突。`LanMultiplayerPatches` 只接管 Android 必需的 transport/UI/settings/player/save 兼容，**不得** patch `MessageTypes.ToId`、`MessageTypes.TryGetMessageType` 或 `NetMessageBus.TryDeserializeMessage`，也不得维护 Android 固定消息表；消息类型发现、排序、ID 与序列化/反序列化始终以当前 payload 对应版本的原版实现为唯一基准，保证 Android 与未修改 PC 使用同一 wire protocol，并保留普通 MOD 自定义 `INetMessage` 的原版排序规则。v0.111.0 target 构造 host/client service 时传入 `PeerVersionInfo.LocalDefault()`，随后完全复用原版 transport-level `HandshakeManager` 对版本、ModelDb hash 与 gameplay/non-gameplay MOD 做握手校验；不得复制握手结构或恢复旧 lobby-message 校验。启用本地 LAN patch 时，兼容层会把原版 `RunSaveManager.LoadAndCanonicalizeMultiplayerRunSave()` 的本地玩家 ID 与 `current_run_mp.save` 内的 `Players[].NetId` 对齐：优先使用当前 ID，其次隐藏稳定字段 `lan_multiplayer_save_player_id`、旧自动 LAN peer ID 或单玩家存档中的唯一 `NetId`，避免用户修改自定义平台/玩家 ID 后旧多人存档被误判为不属于本机；`lan_multiplayer_save_player_id` 是 Android-only settings key，需保留在 merge 列表中。`max_multiplayer_players > 4` 仍是实验容量；`ExtendedMultiplayerRoomPatches` 只补齐已确认的房间四槽断点：宝箱按同步器遗物数动态创建/排布 holder、保护第五人默认焦点并分散奖励/剪刀石头布手势，休息点在原版 `_Ready()` 按玩家索引前创建有序角色容器。该补丁不得改写宝箱生成、投票、奖励归属、休息点玩法或网络协议，其他原版界面仍需逐项验证。
+11. `LifecycleAndPerformancePatches` 会在 `NMainMenu._Ready` 后启动安全 deferred preload，并在需要细分或额外 warmup 时接管原版 `LoadCommonAndMainMenuAssets()`；`CombatAnimationWarmupPatches` 会在当前 `NCombatRoom._Ready` 后按需复制实际出场角色的原生 `SpineSprite`（`Duplicate(0)`，无脚本、信号连接、分组、场景重实例化，进树前移除全部子节点），在临时全屏遮罩后对独立副本采样 clip；不得再调用活体角色的 `SetAnimationTrigger()`、修改其 animation state、执行状态图条件委托或复制 `NCreature`/`CreatureAnimator`。副本逐角色创建并释放，缺失 Spine 合约时跳过该角色，不回落到活体预热。总开关 `preload_enabled` 默认开启；Android 附加设置页顶部“系统”分区中它只作为总开关显示，右侧箭头打开预加载详细管理 BottomSheet，总开关开/关不改写细分项目；`preload_startup_common_enabled=true`、`preload_startup_main_menu_enabled=true`、`preload_runtime_enabled=true` 保持旧版默认资源加载；关闭预加载时只能在原版 `PreloadManager.LoadAssets` 阻止加载并返回完成态空 session，不能跳过外层 `LoadAssetSets` 的 cache/missed-set 淘汰；`preload_protect_warm_cache_enabled=true` 默认保护已预热缓存，compat 层会过滤原版 `AssetCache.UnloadAssets()` / `UnloadMissedCacheAssets()` 对 Android warm cache 的卸载；卡牌 banner/frame 与卡面 blur/mask `ShaderMaterial` 额外作为 Android runtime pinned assets 固定保护，避免关闭/跳过运行时预加载时 missed-cache cleanup 释放公共卡牌材质后，`NCard.Reload()` 复用材质抛 `ObjectDisposedException: Godot.ShaderMaterial`；`preload_learned_assets_enabled=true` 默认把实战 miss 写到 `<files>/launcher/preload-learned-assets.json` 的 schema 2 单一快照；最多 512 条，绑定当前 profile/game/mod 路径、游戏与 compat MVID、实际已加载 MOD 顺序/版本及文件长度/mtime，仅同一上下文后续启动复用，旧无上下文数组或上下文不符时重新学习，通过同目录临时文件原子替换，不积累历史快照；`preload_menu_hotspots_enabled=false`、`preload_vfx_mode=off`、`preload_vfx_tree_warmup_enabled=false`、`preload_vfx_tree_warmup_scope=safe`、`preload_vfx_retain_cache_enabled=false`、`preload_combat_animation_warmup_mode=off`、`preload_combat_hit_effect_warmup_enabled=false`、`preload_combat_code_enabled=false`、`preload_shader_mode=off`、`preload_gameplay_assets_enabled=false` 默认为关闭，避免默认行为比旧版更重。高级开关可分别控制 CommonAssets、MainMenuSet、常用菜单实例化、VFX 场景资源 warmup、VFX 实际进树跑帧范围、VFX 缓存保留、当前战斗房间独立 Spine 副本 clip 预热、战斗命中特效/受击音效预热、战斗代码 warmup、已知 shader 资源加载、run/act/room 预加载、缓存保护、实战资源补全包与漏载学习，BottomSheet 的“恢复默认”只重置这些细分项目，不修改 `preload_enabled`。VFX 实际进树 warmup 的 `safe` 范围只跑安全名单，当前包含高频战斗 VFX 与猎人小刀相关 `vfx_shiv_throw` / dagger VFX；`all` 范围会逐个尝试让 `res://scenes/vfx/**/*.tscn` 全部进树跑帧，单项失败会记录并跳过，用于卸载重装后尽量填充 Godot shader cache，但不会自动执行卡牌/怪物战斗逻辑；小刀/匕首类场景会至少跑 12 帧，以覆盖 `_Ready()` 后首批粒子和约 0.15 秒后的 impact 粒子。战斗动画预热支持 `off` / `safe` / `all`：`safe` 在独立副本上采样按名称筛选的攻击、施法、受击、猎人小刀等安全 clip；`all` 同样只采样副本的全部可用 clip，每个角色最多 128 项，覆盖更广但更重，仅建议高内存诊断。两者均不执行原版 gameplay trigger 或事件回调，因此不保证预热 trigger 附带的 VFX/音效。动画预热期间会给当前战斗房间加临时全屏遮罩，背后的独立 Spine 副本实际绘制以触发 GPU/Spine 热身，但不暴露采样动作。战斗命中特效预热开启后，会在同一遮罩后实例化真实伤害数字、命中火花、斩击/钝击 VFX，并以 0 音量触发当前怪物和常见敌人受击 FMOD 事件来加载 sample data，不改血量、出牌或战斗历史；完成日志会输出 `hit_effects` / `hit_audio`。摘要日志按 `resource_only` / `tree_warmed` / `tree_ineligible` / `tree_failed` 区分，并在 VFX warmup 完成时输出 `<files>/shader_cache` 前后文件数/字节数；隐藏诊断字段仅保留 `preload_debug_enabled`，显式开启后才会输出逐资源 miss 分类、phase enter/leave 和逐动画明细。Godot 渲染侧 shader 编译缓存会持久写到 `<files>/shader_cache/**.cache`，跨进程/设备重启保留；compat protected warm cache 只是内存中的 `PreloadManager.Cache` 保护，不跨进程。`tools/debug/sts2-adb-debug.sh --preload aggressive` / `tree_warmup` 会额外开启 `preload_gameplay_assets_enabled`、`preload_vfx_tree_warmup_enabled`、`preload_vfx_retain_cache_enabled`、`preload_combat_animation_warmup_mode=safe`、`preload_combat_hit_effect_warmup_enabled`；`--preload vfx_full_tree` 会启用全 VFX 场景进树探测；`--preload animation_full` 会同时启用全 VFX 场景进树探测和当前房间全 Spine clip 采样，用于“尽量全热完”的高内存诊断。需要最高细节日志时，用自动化 `--settings-json '{"preload_debug_enabled":true}'` 显式打开隐藏诊断。
+   `AndroidAssetCacheLifecyclePatches` 独立保护资源生命周期，但不得改变上述预加载收集范围、加载时机、learned 资源 512 条上限或启动 warm cache 的完整保护范围：它只后置拦截原版私有 `AssetCache.RemoveAndGetResource()` 的返回值，让原版仍按既有 asset-set / protected-path 规则移除 cache 索引并清理 missed set，同时阻止 `UnloadAssets()` / `UnloadMissedCacheAssets()` 对返回资源显式调用 `Dispose()`；仍被节点、对象池或异步任务持有的 Godot `Resource` 因而保持有效，无引用资源交给 Godot `RefCounted` / GC 自然释放。
+   `UiScalePatches` 的静态缩放订阅由节点生命周期管理：`TreeExiting` 立即解除，重新进树后恢复，重复 Ready 不重复订阅；不要等到下一次缩放才清理已离开场景的闭包，也不要为掩盖滞留恢复全局强制 Dispose 或新增 GC 时机。`AndroidParticlePreprocessPatches` 只在战斗背景设置/先古视觉初始化后遍历已知瀑布巨人背景与欧罗巴斯背景；仅缩短标准材质、非 burst/one-shot/trail/sub-emitter 的持续环境粒子中超过两个寿命周期的 preprocess，保留至少一周期与原发射相位，不改粒子数量、材质、寿命、速度。长寿命、爆发型和未知材质保持原样，不全局 patch 粒子或高频 AddChild；这不是已证实的 issue/OOM 根因修复。事件初始化仍保留原版异常与失败流程。回归入口：`port-mod/tools/test-resource-safety.sh`。
+12. `TransitionMaterialPatches` 会复制 `NTransition` 使用的 fade/fight `ShaderMaterial`，在全局 disposal guard 之外继续隔离 transition tween 对共享材质状态的修改并兼容旧包行为。`v0.107.0-beta`、`v0.107.1` 与 `v0.108.0` target 另有 `MapDrawingSceneCachePatches`，让地图画笔线条从 Android 自持有的 `PackedScene` 实例化，避免长期 owner 字段依赖已离开 cache 索引的 `map_line_draw` / `map_line_erase` 场景；两者都作为资源 owner 纵深防护保留。
+13. `ModelDbInitPatch` 分三个阶段处理模型占位：
+   - **早期原版 shadow 占位**（加载 MOD 前，由 `ModLoaderPatches` 触发）：仅原版，未初始化对象只进入兼容层 shadow registry，不写入 canonical `ModelDb._contentById`；`Get<T>()`、`Get(Type)`、`GetById<T>` / `GetByIdOrNull<T>` 和类别 getter 的按键读取均可访问同一 shadow 对象，已有 canonical 值优先，原版 ID、类型转换和错误语义不变。不得逐个 patch 引用类型共享 native 方法体的闭合泛型方法；临时字典 prefix 只接受 canonical 实例，phase 1 发布同一对象后移除，不增加稳态字典 wrapper。该隔离保留 PC 的 pre-init 内容注册窗口，避免 `ModHelper.AddModelToPool` 被误判为 too late；占位 id 会记录 owner type，供 MOD initializer shield 判断“命中的是早期原版占位还是自身真实重复”。
+   - **MOD initializer shield**（每个 `TryLoadMod` 调用期间）：`ModelDb.Contains(Type)` 对非原版程序集类型、且当前 id 只命中早期原版 shadow 占位时返回 `false`，还原 PC 上 MOD 初始化早于 `ModelDb.Init` 的行为；该 shield 不隐藏原版类型、不隐藏同一 type 的重复，也不在 phase 1/phase 2 后生效。
+   - **phase 1**（`ExecuteEssential` 中、`ModelDb.Init()` 调用**之前**）：先发布早期 shadow，再在所有 MOD patch 已应用后按最终 `ModelDb.GetId(Type)` 补齐全部模型（含 MOD 自定义类型）占位；解决 MOD 间静态构造引用（如 `wuwancients.HiddenSeaRecord..cctor -> RELIC.LONG_SNAKE_NECKLACE`），这些构造会在 MOD 的 `ModelDb.Init` prefix 期间被 Android/Mono 提前触发。
+   - **phase 2**（`InitPrefix` 中，`Priority.Last`）：在占位上原地运行真实静态/实例构造器，并跳过原版 one-pass body。因部分 MOD 的 `ModelDb.Init` prefix 会自己返回 `false` 并让 Harmony 跳过后续 prefix，因此兼容层同时安装 `Priority.First` postfix 与 `ExecuteEssential` 后置兜底，确保构造 phase 一定执行。自定义模型 ID（含 `ENCOUNTER.YUWANCARD-KILLER_ELITE` 等带前缀 ID）完全由原版 `ModelDb.Init` + MOD `GetEntry` patch 自然产生，不再人为迁移 key。用户 MOD 的 `ModelDb.Init` prefix/postfix 生命周期保留。回归入口：`port-mod/tools/test-modeldb-shadow-placeholder.sh`。
+   - `DeferredModPatchQueue` 除了拦截 direct `PatchProcessor.Patch()` 和 `Harmony.PatchAll()` 的逐目标 job，也会在执行前检查 `HarmonyTargetMethods` / `HarmonyTargetMethod` 工厂；若工厂读取 `ModelDb`，则整体排队并在模型/network 初始化后原样重放，保留 owner、排序、PatchAll 元数据及逐目标 prepare/cleanup。`AssetSets` 等静态初始化经辅助方法、字段、构造器或迭代器读取模型内容/消费 MOD 池的资源 target 同样延迟；ID 计算、类型发现和安全注册 target 仍立即应用，不得放宽原版消费后的迟到注册检查。单个失败隔离，重复 flush 幂等。回归入口：`port-mod/tools/test-deferred-mod-patch-queue.sh`；真实 Loadout 三个工厂的既有 smoke 已覆盖 1205 个目标。
+   - `UnlockStateCompatPatches` 在 `ModelDb` 初始化完成前让 `ModelDb.AllEncounters` 返回空列表，避免 Android/Mono 因 Harmony patch getter 提前运行 `UnlockState..cctor` 时枚举到尚未构造/注册完成的 MOD encounter；初始化完成后会修复可能提前创建的 static readonly `UnlockState.all`。
+
+- ShaderCompatibilityPatches 的 shader variants 仅在 `shader_compatibility_mode` 开启时加载：独立 shader 按原版 `res://` 精确路径替换，内嵌 VisualShader 按审计生成代码 SHA-256 且限定 `res://scenes/`、`res://images/`、`res://shaders/` 内置路径；`res://mods/` / `res://user/` 不命中。现有 screen effect、普通卡牌 blur、water/flipbook/chromatic/HSV/rest-site/scry/oil 与已审计 fire VisualShader variants 保留原 uniform 协议；`NMainMenu`、`NEpochSlot`、`NRadialBlurVfx` 缓存材质及 `NCard.Reload` 赋值边界必须同步修复。`canvas_group_mask_blur.gdshader` 古卡遮罩路径明确排除，Spine material slot 不由 CanvasItem NodeAdded 扫描接管。
+上述 MOD 初始化时序、本地 LAN patch 自动跳过大厅 MOD、LAN wire protocol 始终由对应版本原版 `MessageTypes` / `NetMessageBus` 唯一负责、预加载/tooltip 设置协议、shader 兼容排除卡面 `canvas_group_mask_blur`、快速重开 async 时序修复是 `v0.103.x`、`v0.106.1-beta`、`v0.107.0-beta`、`v0.107.1`、`v0.108.0`、共享 `v0.109.x`、共享 `v0.110.x` 与独立 `v0.111.0` target 都应保持的相同不变式；v0.109.0/v0.109.1 的托管 API 与方法 IL 相同，`ModelDb.Init(Type[]? injectedModelTypes = null)` 由兼容层用 Harmony `__args` 同时覆盖旧无参/v109/v110/v111 调用，正常 null 路径继续 two-phase 初始化，显式测试注入集合则保留原版行为。v0.110.0 删除 `InitialGameInfoMessage.Basic()` 并把版本/MOD 信息移到 `PeerVersionInfo`，LAN compat 只保留 `GetGameplayRelevantModNameList` postfix 自然进入原版 LocalDefault，不得重建消息结构；v0.111.0 再把该校验移到 transport handshake，并要求 service 构造参数，compat 只提供 `PeerVersionInfo.LocalDefault()` 后交回原版 `HandshakeManager`。`ProgressState.TotalUnlocks` 改为 Epoch 派生值，“全部解锁”只对旧 target 的可写 property 反射写 legacy counter。flat matrix 模式下跨版本热修需通过所有 active target compile gate。legacy 分支模式仍在用时，跨版本热修还需同步到 `tools/android/stage-bundled-compat-packs.sh` 的 worktree 注入列表。只在特定游戏版本复现的修复应通过 target capability/条件逻辑限制，避免无条件影响其他 target。详细流程见 `doc/runtime/compat-pack-loading-flow.md`。
+
+#### Android 音频约束
+
+- APK 中的 FMOD core、Studio 与 Godot 原生桥必须作为 2.03.06 配套单元同步，不能只替换两个 FMOD 库或把参考 Android runtime 自带的 2.02 库留在最终 APK；同步前要求三件套 SHA 命中，debug/release 均使用配套 release 桥，移除依赖未打包 `libfmodL` 的旧 debug 桥。PC v0.107.1/v0.111.0 原版 `fmod.dll`/`fmodstudio.dll` 为 2.03.06；不能用 APK 静态校验代替 MOD bank 真机播放验证。
+- `tools/android/fmod-shim/org/fmod/FMOD.java` 是 native FMOD 的 JNI 合约：当前 2.03.06 使用 `getDevices(int)` / 设备名/类型；旧 `getAudioDevices(int)` 仍保留兼容，两者必须一致过滤 remote-submix（type 25）。USB/蓝牙/有线输出增删都要同时通知 `SetOutputEnumerationChanged` 与 `OutputAAudioHeadphonesChanged`，两者不是同一个 native 状态；输入通知失败不得挡住输出通知。保留 Android 默认媒体路由，不强制扬声器、不启用通话 SCO。BLE/助听设备也应禁用低延迟路径。GodotApp 与 Godot plugin 的重复 `FMOD.init` 保持幂等，close 后旧 callback 不得影响新会话。
+- `audio_compatibility_mode` 由 `GodotApp.onCreate()` 在 native FMOD 初始化前从当前 profile 的 settings 读取并写入 shim；开启后 `supportsAAudio()` / `supportsLowLatency()` 返回 false，让 FMOD 走旧式输出路径，需重启游戏。不能只保留开关或只依赖旧参考工程的 FmodManager.gd；它不是当前 payload 的资源。该设置不控制后台静音。
+- full compat 的 `AndroidAudioLifecyclePatches` 独立注册，在 `NGame._Ready` 后才解析并 patch 原版 `NMuteInBackgroundHandler` 自己声明的 `_Notification`，不得提前 patch 继承的 Godot `_Ready/_Process`。按原版 `PrefsSave.MuteInBackground` 立即设置 FMOD/Godot 音量并调用 `FmodServer.update()` 提交 Studio 命令，不依赖停帧后无法完成的 Tween 或 deferred callback；只有 application resumed、application focused、window focused 都满足才恢复最新 `SettingsSave.VolumeMaster`。不得改写用户音量、恢复成固定音量、手动派发 GodotLib 焦点或触发 viewport 重建。offline bootstrap 不包含该 full compat patch。
+- 合成回归：`port-mod/tests/AndroidAudioLifecycle.Tests`（用 `HarmonyReferenceDir` 指向打包的 `android/assets/dotnet_bcl`）；覆盖无渲染帧、FMOD 命令未提交、通知乱序、关闭静音偏好、用户零音量和非 Android 隔离。legacy 注入列表必须包含 `AndroidAudioLifecyclePatches.cs`。
+
+#### 窗口显示与生命周期约束
+
+- `DisplaySettingsPatches` 是兼容层中根窗口 `ContentScaleMode` / `ContentScaleAspect` / `ContentScaleSize` 的唯一写入者；逻辑 owner 优先级为 `PortraitCompat > FixedAspect > UiScaleAuto`，根 Window 始终使用 `CanvasItems`。只有显式选择 `android_screen_rotation_mode=portrait` 时才启用 `PortraitCompat`：使用 `Expand` 与 1080 宽、按 native 短/长边比例计算高度的竖屏画布，避免横屏 aspect/UI scale 覆盖竖屏 MOD 的布局基准；画面比例和 `user://ui_scale.cfg` 的选择不被改写，切回横屏后恢复原 owner。Auto 使用 `UiScalePatches` 提供的 UI scale target，固定画面比例使用对应 fixed target；owner 必须在任何 Godot Window setter 前发布，setter 必须 compare-before-set，并保留 `_isApplyingDisplaySettings` 重入保护与 single-flight deferred 队列；不得在其他 compat patch 恢复直接 `ContentScale*` 写入。
+- `fullscreen_render_size` 是 full compat 的动态根 render-target 预设，但不得接管逻辑 ContentScale。所有高层 `CanvasItems` setter 完成后，`DisplaySettingsPatches` 从 `GetVisibleRect().Size × abs(GetStretchTransform().Scale)` 重算 native attachment `A`，以 uniform Expand 语义把预设矩形换算为同画面比例的实际目标 `R`，再且只再调用 `RenderingServer.ViewportSetRenderDirectToScreen(false)`、`ViewportSetSize(R)` 与 renderer-side `ViewportSetGlobalCanvasTransform` 补偿；不得写 `window.GlobalCanvasTransform`。`0x0` 必须显式恢复 `A` 与原 server canvas transform，不能写零尺寸。自定义目标边长最多 4096，但不能因此把 native 恢复尺寸压低。Window `SizeChanged`、resume、Ready 与 resume repair 后必须幂等重投；缓存只能用于日志，不能跳过生命周期重投。
+- Java 不得为 `fullscreen_render_size` 追加 `--resolution`，也不得通过 `SurfaceHolder.setFixedSize()`、`DisplayServer.WindowSetSize()` 或 `ViewportAttachToScreen()` 强制 Android buffer/attachment 尺寸；动态切换只改变 Godot renderer 内部 RT，Android Surface、Window mode、scene-side CanvasItems transform 与输入逆变换必须保持不变。该隔离是避免触控漂移、Surface 重建竞态和高刷失效的硬约束。`global_scale` 在所有 owner 下仍独立作为 `ContentScaleFactor`，`ui_font_scale_percent` 也独立；`user://ui_scale.cfg` 的 UI scale 在 FixedAspect/PortraitCompat 期间保留但不控制 Size，回到 Auto 横屏后恢复。
+- `UiScalePatches` 只供给 `UiScaleAuto` 的目标 Size，`NGlobalUi.OnWindowChange` / `NMainMenu.OnWindowChange` prefix 只能抑制原争写并请求一次 deferred 重算；不得直接写 `ContentScale*`。
+- `NGame._Notification` 显示设置路径只响应 `NotificationApplicationResumed`，并合并为一次 deferred runtime apply；不得重新把 `NotificationWMWindowFocusIn` / `NotificationApplicationFocusIn` 加回同步 viewport 重建路径。`ApplyRuntimeDisplaySettings()` 只允许一次 `NGame.ApplySyncSetting()`。每个 resume generation 在 canonical apply 后只做一次 deferred 一致性校验；若 Mode/Aspect/Size/Factor 被其他回调覆盖，最多 compare-before-set 修复一次并再做只读终检，仍不一致只告警，禁止循环重建 viewport。
+- Java 侧不得手工调用 `GodotLib.focusin/focusout`。显示刷新率延迟请求必须绑定 controller generation 与 surface epoch，且在失焦、pause、destroy、Surface 销毁或切换模式后取消；实际 apply 时必须再检查 resumed、focused、View attached 与 `Surface.isValid()`。API 31+ 使用 `CHANGE_FRAME_RATE_ALWAYS`，同一有效 Surface 未变的模式不重复投票；high/60hz 切换可重新投票，system 或没有兼容 60Hz 目标时必须撤销旧 vote 并清空 Window 偏好。精确 mode 使用 `preferredDisplayModeId`，alternative-only 清空 ID 并使用 `preferredRefreshRate`。60Hz 容差双向限定，不可把 90/120Hz 当 60Hz 已验证；显式 mode ID 不符也不得 verified。请求后只做有界延迟验证；不得使用 `SurfaceControl`、改 Surface 尺寸或无界重试。
+
+### 8.5 MOD 兼容性排查规范
+
+排查普通 MOD 在 Android 上无法加载、依赖缺失、初始化顺序异常或行为与 PC 不一致时，遵循以下约定：
+
+- 可以把常用前置/依赖 MOD 仓库 clone 到工作区外或 `.agent/reference-repos/` 等不提交的位置，并 checkout 到与目标游戏版本、目标 MOD 版本匹配的 tag/branch/commit 后对照排查；不要把这些第三方源码或构建产物提交到本仓库。
+- 优先参考对应版本 PC 原版/解包代码，尤其是 `ModManager`、依赖排序、manifest 解析、assembly resolve、资源加载和初始化回调的时序；重点确认 Android 兼容层是否漏掉某一步、提前/延后某一步，或改变了原版加载顺序导致 MOD 兼容问题。
+- 对没有公开源码的 MOD，可以通过反编译其程序集获取可参考信息，用于定位入口类、manifest、依赖声明、Harmony patch、资源路径和初始化假设；反编译结果只作为本地诊断依据，不要提交第三方反编译源码或违反其许可条款。
+- 常见前置/依赖仓库：
+  - RitsuLib: <https://github.com/BAKAOLC/STS2-RitsuLib>
+  - BaseLib-StS2: <https://github.com/Alchyr/BaseLib-StS2>
+
+## 9. 构建 / 打包环境
+
+### 9.1 Android/Gradle 版本
+
+来自 `android/config.gradle` / `android/gradle.properties`：
+
+- Android Gradle Plugin：`8.6.1`
+- Gradle wrapper：`8.13`
+- Kotlin plugin：`2.1.20`
+- Steam 相关 Gradle 子模块：`android/steam-protocol`、`android/steam-content`；主要依赖 JavaSteam `1.6.0`、OkHttp `5.3.2`、protobuf `4.31.1`、AndroidX Security Crypto、Android Prefab zstd（Steam VZstd chunk native 解压）、XZ。
+- compileSdk / targetSdk：`35`
+- minSdk：`24`
+- buildTools：`35.0.0`
+- NDK：`28.1.13356709`
+- CMake：`3.22.1`（用于 `libworkshop_zstd.so` JNI wrapper；Gradle 可按 SDK license 自动安装到 `.env` 配置的 Android SDK）
+- Java source/target：`17`
+- flavor：`mono`
+- 默认 build type：`release`（脚本执行 `assembleMonoRelease`）
+- ABI：`arm64-v8a`
+- applicationId：`com.megacrit.sts2re`
+- versionName/versionCode：`v0.1.11` / `113`
+- 默认测试签名：由 `.env` 的 `RELEASE_KEYSTORE_*` 或 `local.properties` 的 `android.release_keystore_*` 提供；示例使用 `${HOME}/.android/debug.keystore`。
+
+注意：`release` build type 当前仍保留 `debuggable true`，便于 sideload 后使用 `run-as` 验证；正式发布前必须重新审视签名、debuggable、混淆、资源优化、FileProvider 暴露范围。
+
+本仓库构建使用 `.env` 中配置的 JDK/Android SDK。容器系统自带 Java 可能只是 JRE，不能直接编译 Java；请使用：
+
+```bash
+tools/android/gradle-with-s2-env.sh <gradle-task>
+```
+
+或先：
+
+```bash
+source tools/android/env-from-s2.sh
+```
+
+### 9.2 运行时二进制同步
+
+`android/assets/dotnet_bcl/`、`android/libs/`、`android/gradle/wrapper/gradle-wrapper.jar` 等大型/生成产物不应手写维护，使用：
+
+```bash
+tools/android/sync-runtime-from-references.sh
+```
+
+同步内容包括：Godot template AAR/native libs、`.NET/Godot` BCL/runtime DLL、crypto native jar、FMOD AAR 与从 AAR 旁 `arm64/`（或 `STS2_FMOD_ANDROID_LIBS_DIR` / `runtime.fmod_android_libs_dir`）读取的 2.03.06 FMOD core/Studio/Godot bridge。FMOD 原生三件套同步前按已知 SHA 拒绝旧 2.02 或混搭库，并替换 debug/release staged 原生库；不提交这些第三方二进制。Java shim 同时提供当前 `getDevices` 和旧 `getAudioDevices`，替换编译生成的全部 `FMOD*.class` 并在写回后校验 AAR 内 `libs/fmod.jar` 的 class 内容；目标 jar 或任一 class 缺失时构建应 fail closed，不能静默保留未 patch 的 AAR。
+同一流程还会对 staged 的 debug/release Godot 4.5.1 template AAR 运行 `tools/android/patch-godot-input-pool.py`：包装 `GodotInputHandler` 在分配 `InputEventRunnable` 前过滤 `ACTION_BUTTON_PRESS/RELEASE` 及其他未处理 mouse action，避免上游池泄漏；参考 AAR 不修改。回归 `tools/android/test-godot-input-pool.sh`，静态检查包装类不再取得 pooled runnable、原始支持事件路径仍保留；这不能替代蓝牙鼠标真机长时间测试。
+
+实验性 Mono 内存总量修复由 `MONO_MEMORY_STATS_FIX` / `runtime.mono_memory_stats_fix` 控制，默认 `0`。用户明确选择最小二进制实验修复后才用 `1`：`tools/android/patch-mono-memory-stats.py` 只接受已锁定 SHA 的 Ekyso ARM64 9.0.7.0 原库及其修复副本，将 `0x1f2444` 的总量查询从 `_SC_AVPHYS_PAGES` 改为 `_SC_PHYS_PAGES`；完整前后 SHA 与命令见 `doc/build/building-and-packaging.md`。只改 `android/libs/{debug,release}/arm64-v8a/` staged 副本，不能覆盖参考输入；关闭后完整打包恢复原库，修复器也支持分离输出的 `--restore`。这不是 Mono 源码重建，不含 `MemAvailable`、堆上限调整或 MOD 特判；保留原库现有 ABI/Harmony 改动，未知 SHA 必须拒绝。ELF build ID 不变，诊断以 SHA 为准。回归 `python3 tools/android/test-mono-memory-stats.py /path/to/original/libmonosgen-2.0.so`；指令模拟不能替代真机游戏/GC 验证。交付实验包时同时保留同签名回滚 APK，不要求卸载或清数据。
+
+MonoMod 原生布局修复默认启用：`sync-runtime-from-references.sh` 调用 `tools/android/patch-monomod-corlib.py`，只更换已锁定 SHA 的 `MonoMod.Utils.dll` 中 `SetMonoCorlibInternal` 方法体，保留 runtime/null gate 和 `ReflectionHelper.AssemblyCache` 三种名称/弱引用/锁语义，删除旧 Mono 私有字段探查和整个错位原生写入。已核对 ARM64 Mono 9 的 `+0x7b` 属于 `ignores_access_checks_assembly_names` 指针，而非旧 `corlib_internal`。当前 Ekyso 原生字段/方法访问检查已经直接允许访问；构建必须核对 debug/release 原生库 SHA，只接受上述原库/内存总量实验副本，未知组合 fail closed，不能猜新偏移或在启动时自 patch MonoMod。参考输入不可变，程序集 identity/MVID 不变，诊断以 SHA 为准；不修改 native Mono、游戏 DLL/MOD、Godot StringName 或 GC。回归：`tools/android/test-monomod-corlib.py`、`tools/android/tests/MonoModCorlib.Tests`、`CompatLaunchReadinessTest`；宿主受控内存/Cecil/Harmony 验证不能替代 Android MOD 真机测试。详见 `doc/build/building-and-packaging.md` §4.2。
+
+### 9.3 导入版 APK
+
+导入版不内置游戏 zip，用户安装后在附加设置中选择本地 `SlayTheSpire2.zip`。
+
+```bash
+tools/package/build_importer_apk.sh
+```
+
+正式 APK 默认声明 Android 游戏分类标记。`GodotApp` 按当前 profile 的 `android_display_refresh_rate_mode=high/60hz/system` 请求默认最高兼容刷新率、同尺寸近似 60Hz 或跟随系统，设置页“系统”分区预加载下方及游戏内 Android 设置提供三挡单选。旧高刷开关迁移为 high/system，新字段优先并移除旧字段。无兼容 60Hz 目标时撤销旧请求并交回系统，不改游戏 FPS/VSync。Activity 级 generation + surface epoch 控制器只在前台、有焦点且渲染 Surface 有效时 apply，暂停/销毁/Surface 销毁或切换模式取消旧任务；Android 12+ 使用 `CHANGE_FRAME_RATE_ALWAYS`，同 Surface 未变的请求不重复投票，切换模式允许更新/撤销，精确 mode 设置 ID，alternative-only 清空 ID 并使用刷新率偏好，随后有界验证实际 mode/Hz，不使用 `SurfaceControl`。设置页同一分区保留默认关闭的性能 overlay 开关，开启后下次启动加载 `godot-debug-menu` 详细面板（FPS、帧时间、CPU/GPU frame graph、硬件/渲染器信息）。该 overlay 源自 `godot-extended-libraries/godot-debug-menu`，MIT license，实际打包文件位于 `port-mod/overlay/addons/debug_menu/`。
+
+脚本流程：
+
+1. `tools/android/sync-runtime-from-references.sh`
+2. `tools/android/build-port-mod.sh`
+3. `tools/android/stage-bundled-compat-artifacts.sh`
+4. `tools/android/gradle-with-s2-env.sh assembleMonoRelease`（默认使用 debug keystore 参数签 release build）
+5. 复制输出：
+   - Gradle 产物：`android/build/outputs/apk/mono/release/sts2-re.apk`
+   - 稳定副本：`dist/sts2-re-importer.apk`
+
+compat / offline bootstrap 构建脚本会把 Git branch、commit 与 commit subject 写入 build metadata / manifest；传给 MSBuild 的 branch/subject 必须先转义逗号、分号和百分号，否则当前提交标题含逗号时会被 MSBuild 拆成多个 `-p:` 属性并导致 APK 打包失败。
+
+### 9.4 直装版 APK
+
+直装版在构建时临时把本地 PC zip 复制到 `android/assets/payload/SlayTheSpire2.zip`，启动器会按内置 zip 的 SHA-256 判断当前 APK 自带本体是否已导入；首次安装或从旧直装版升级且只导入过旧内置本体时，会自动解压/安装当前内置 zip 到 payload store `<files>/payloads/<payload_id>/game/` 并创建/选择 launch profile。zip 复制有 trap 清理，不提交。
+
+```bash
+tools/package/build_direct_apk.sh "/path/to/SlayTheSpire2.zip"
+```
+
+输出：
+
+```text
+android/build/outputs/apk/mono/release/sts2-re.apk
+dist/sts2-re-direct.apk
+```
+
+### 9.5 常用检查命令
+
+```bash
+# payload zip 校验
+tools/package/validate_payload_zip.py "/path/to/SlayTheSpire2.zip"
+
+# 可选：用匹配 Godot 源码/反导出工程重新导入 Android 资源 PCK，生成优化本体 zip（DLL 仍来自 PC zip 原版）
+tools/package/build_android_body_zip.sh \
+  --pc-zip "/path/to/SlayTheSpire2.zip" \
+  --source-dir "/path/to/sts2-godot-source" \
+  --out "dist/payload/sts2-vX.Y.Z-android-body.zip"
+# 该脚本会在临时工程合成缺失 `.uid` sidecar，并同时 patch `project.godot` / `project.binary` 的旧 `SentryInit` 与 v0.110.0 起使用的 `SentryBootstrap` autoload；managed DLL keep-list 从原版 deps 推导以保留 `Sentry.Godot.dll`；还会从源工程 `.godot/imported` 注入 Spine `.spatlas` / `.spskel` 与 `.atlas.import` / `.skel.import` remap 并强制校验，避免导出的 PCK 因缺 Spine 导入产物导致主菜单/战斗黑屏。不要去掉这些步骤，否则重导出的 PCK 可能出现首帧 native crash 或资源黑屏。
+
+# 只编译 Java/Gradle 检查
+tools/android/gradle-with-s2-env.sh :compileMonoDebugJavaWithJavac
+
+# 只构建当前兼容 MOD fallback
+tools/android/build-port-mod.sh
+
+# 合成回归：Harmony.PatchAll 不得在 MOD initializer 提前触发 NDailyRunScreen 形状的 UI .cctor
+port-mod/tools/test-deferred-mod-patch-queue.sh
+
+# 合成回归：Harmony/Cecil 发射必须保留 method custom modifiers、opcode/calling convention 与 generic parameter
+port-mod/tools/test-harmony-method-reference-importer.sh
+
+# 合成回归：MOD 初始化窗口保持 canonical ModelDb 未初始化，phase 1 才发布 vanilla shadow
+port-mod/tools/test-modeldb-shadow-placeholder.sh
+
+# 合成回归：超过四人时宝箱/休息点 UI 槽位必须按玩家/遗物数扩容
+port-mod/tools/test-extended-multiplayer-rooms.sh
+
+# 构建全部 APK 内置兼容 artifacts（full family 包 + offline bootstrap 包）
+tools/android/stage-bundled-compat-artifacts.sh
+
+# 单独验证 offline bootstrap synthetic/已配置 original 反射合约
+offline-bootstrap/tools/test-offline-contract.sh
+
+# 只构建 full family 包（默认 flat schema 2 family 包）
+tools/android/stage-bundled-compat-packs.sh
+
+# legacy 分支模式，仅用于回退诊断
+COMPAT_PACK_BUILD_MODE=legacy tools/android/stage-bundled-compat-packs.sh
+
+# 游戏版本更新后，先对比旧/新 GDRE C# 源码并映射 port-mod 触达点
+# summary.md / port_mod_refs.csv / member_changes.csv 输出到 .agent/reports/，不提交。
+tools/port_mod_ast_audit.py \
+  --old-source ../s2_original/s201090 \
+  --new-source ../s2_original/s201091 \
+  --port-mod port-mod/STS2AndroidPortCompat \
+  --out .agent/reports/v1091-port-mod-ast-audit
+
+# 刷新 Android 启动器 Material Symbols 官方轮廓 vector drawable
+# 需要 Python 包 fontTools；若系统 Python 禁止全局安装，可用 .agent/ 下的临时 venv。
+python3 -m pip install --user fonttools
+tools/android/generate-material-symbol-vectors.py
+tools/android/generate-material-symbol-vectors.py --check
+```
+
+## 10. Git / 产物注意事项
+
+- `.gitignore` 已排除：
+  - `dist/`、`*.apk`、`*.aab`、`*.apks`
+  - `.env`、`local.properties`
+  - `.agent/`、`.pi/`
+  - `local-inputs/`、用户 `*.zip`、keystore/jks/p12
+  - `android/assets/compat_packs/*.zip`
+  - `android/.gradle/`、`android/**/build/`
+  - `android/assets/dotnet_bcl/`
+  - `android/libs/`
+  - `android/assets/payload/`
+  - .NET `bin/` / `obj/`
+- `android/assets/compat_packs/*.zip` 是脚本生成的内置兼容包 assets，随 APK 打包但不再由 git 跟踪；需要刷新 APK 内置包时运行 `tools/android/stage-bundled-compat-artifacts.sh` 或完整打包脚本，提交前不要 `git add -f`。
+- 不要提交用户 payload zip、original/reference DLL、完整 runtime、keystore、compat pack zip 或任何商业游戏资源；本机路径只写入 `.env` / `local.properties`。
+- 修改 `port-mod/overlay` 后需要重新生成 `port_compat.pck`，并重新导出/复制内置兼容包。
+- 修改 `tools/android/make-bootstrap-pck.py` 后需要重新生成 `android/assets/bootstrap.pck`。
+- 修改启动器图标 glyph 映射或新增 `MaterialSymbols.drawable(..., "glyph", ...)` 字符串图标后，需要运行 `tools/android/generate-material-symbol-vectors.py` 刷新 `android/res/drawable/ic_ms_*.xml`，并用 `tools/android/generate-material-symbol-vectors.py --check` 校验；脚本依赖 Python `fontTools`，可装在 ignored 的 `.agent/` venv 中。不要恢复运行时 icon font ligature 渲染，否则 MIUI 关闭优化等 ROM 字体路径可能显示原始 glyph 名称。
+- 修改 Java bridge 包名/类名要谨慎：C# helper 和 patched runtime 默认找 `com.godot.game.GodotApp`。
+- flat matrix 模式下，共用兼容层热修只维护在当前 checkout，必须通过 `port-mod/tools/build-compat-matrix.sh` 的所有 active target compile gate；只在某个游戏版本复现的问题优先放入 target adapter/capabilities 或极少量条件编译。legacy 分支模式仍在用的共用热修，需要同步更新 `tools/android/stage-bundled-compat-packs.sh` 的 worktree 注入列表，确保 `v0.103.x`、`v0.106.1` 与 `v0.107.0` legacy 内置包都得到同一修复。
+- 改 `applicationId` 时同步 shortcuts、FileProvider、manifest、Gradle 配置与所有 hard-coded target package。
+
+仓库 / 子模块 HEAD 巡检：
+
+```bash
+tools/git/report-heads.sh
+# 如需刷新远端引用：
+tools/git/report-heads.sh --fetch
+```
+
+该脚本只读取/可选 fetch Git 信息，不修改工作区文件；适合提交前排查 `port-mod` 分支、父仓库记录的 submodule commit、dirty/upstream ahead-behind 状态。
+
+## 11. 常用验证路径
+
+本地构建：
+
+```bash
+tools/package/build_importer_apk.sh
+# 或
+tools/package/build_direct_apk.sh "/path/to/SlayTheSpire2.zip"
+```
+
+连接 ADB 设备后的自动化验证：
+
+```bash
+# 构建 + 安装 + 写入 app 私有 automation token
+tools/debug/sts2-adb-debug.sh build-install
+
+# 查询 launcher/profile/payload/compat/MOD 状态并拉回结果到 .agent/debug/runs/<run_id>/
+tools/debug/sts2-adb-debug.sh status --pull
+
+# 只验证启动准备路径，适合 compat dll/overlay/publish/preload 排查
+tools/debug/sts2-adb-debug.sh prepare --mode compat --clear publish --pull
+
+# 启动游戏并采集 logcat / Perfetto
+tools/debug/sts2-adb-debug.sh launch --mode perf --preload aggressive --logcat-duration 45 --perfetto 45 --pull
+```
+
+脚本会把本地 payload/compat/MOD 文件推送到设备 app 私有 `files/automation/inbox/<run_id>/`，再复用应用内正常导入/配置/准备逻辑。调试结果只放在 ignored 的 `.agent/debug/runs/` 和设备 `<files>/automation/`，不要提交。
+
+安装后建议检查：
+
+```bash
+adb install -r dist/sts2-re-importer.apk
+adb shell run-as com.megacrit.sts2re ls files
+adb shell run-as com.megacrit.sts2re ls files/compat-packs
+adb shell run-as com.megacrit.sts2re ls files/payloads
+adb shell run-as com.megacrit.sts2re ls files/instances
+adb shell run-as com.megacrit.sts2re cat files/launcher/selected_instance.json
+adb shell run-as com.megacrit.sts2re ls files/.godot/mono/publish/arm64
+```
+
+重点 smoke test：
+
+1. 首次打开进入欢迎向导/附加设置，而不是直接进游戏。
+2. “版本”页能安装/显示内置兼容包，至少包含当前 `v0.111.0`、正式 `v0.103.x` / `v0.107.1` / `v0.108.0`、共享 `v0.109.x` / `v0.110.x` target，以及旧 beta `v0.106.1` / `v0.107.0`。
+3. 导入版选择 PC zip 或 Steam 下载后，`files/payloads/<payload_id>/game/.payload_manifest.json` 存在，`files/payloads/<payload_id>/game/SlayTheSpire2.pck` 存在，并创建/选择 `files/instances/<profile_id>/instance.json`；切换版本不应复制回 `files/game/`。Steam 下载来源应在 manifest 中记录 `source.kind=steam_depot`。
+4. 新建启动配置时按 payload 版本填入匹配兼容包；之后不再有全局选中包。删除 payload 或 compat pack 后，相关启动配置仍保留并在列表中显示缺失；当前 profile 无可用兼容包时启动会弹推荐 Bottom Sheet，优先给出内置/已安装 full 匹配，无 full 匹配才给出离线通用包，并允许“使用推荐并继续”或直接打开兼容包管理。
+5. 点击启动后 logcat / 当前 profile 的 `files/instances/<profile_id>/logs/android-launch.log` 能看到 selected compatibility pack 和 `Loading imported game PCK`；全局 `files/logs/sts2.log` 应包含应用内采集到的 Android logcat（如 `Sts2Re` / `GODOT` / `[STS2Mobile]`）。
+6. `files/.godot/mono/publish/arm64/STS2Mobile.dll` 来自当前选择的兼容包；`files/port_compat.pck` 已 staging。
+7. 修改图形/输入/MOD 设置后，当前 profile 解析出的 settings（全局 `files/default/1/settings.save` 或隔离 `files/instances/<profile_id>/default/1/settings.save`）有对应字段；新安装/新建隔离档案首次生成的默认图形设置应为 `msaa=0`、`vsync=off`；画面高级里的旋转模式默认写入 `android_screen_rotation_mode=user_landscape`，选择“自动”时写入 `auto`，选择“不旋转”/“180°”时分别写入 `landscape` / `reverse_landscape` 并同步旧 `android_flip_screen_180` 布尔值。
+   竖屏回归：选择“竖屏（需配合竖屏 MOD）”后保存 `android_screen_rotation_mode=portrait` 和 `android_flip_screen_180=false`；新设置仍默认为 `user_landscape`。重进设置须保留竖屏选择；实际游戏 Activity 使用 portrait，full compat 在固定横屏比例已保存时仍使用竖屏逻辑画布，切回横屏恢复比例/UI scale。回归：`ScreenRotationSettingsTest`；原生 Godot smoke 还应覆盖 resize/resume、渲染预设切换后的输入映射和迟到的 MOD 横屏画布恢复。
+8. 从游戏内打开附加设置、退出回设置、crash/log/file browser 页面不崩溃。
+9. MOD master switch / 单 MOD disable 能在启动日志或游戏内 MOD 状态中反映；普通 MOD 从当前 profile 的 MOD 目录扫描（全局 `files/mods` 或隔离 `files/instances/<profile_id>/mods`），不走 Steam Workshop。
+10. `v0.111.0` payload 应按 DLL SHA `0861bfa1...` 精确使用 `sts2-android-compat` / `v0.111.0`；`v0.110.0` / `v0.110.1` payload 应按各自 DLL SHA（`7a259236...` / `7c446efa...`）使用共享 `v0.110.0` target；`v0.109.0` / `v0.109.1` 使用共享 `v0.109.0` target；其他历史 payload 继续按各自 target 精确匹配。v0.111 LAN 还需实测 Android/未修改 PC 的 host/join/load/rejoin、MOD mismatch、ModelDb hash mismatch 与失败提示。
+11. Steam 中心可登录/验证 refresh token；手机确认出现后应立即存在认证前台通知并已经轮询，切到 Steam App 批准再返回即可完成，不需要小窗或额外点击“已批准”。至少实测普通切后台、Activity 重建、CM 断线后重连、未过期事务的进程恢复、Guard 动态码、取消与 4 分钟超时；确认密码/本次 Guard code 不落盘或进入日志、取消/过期清除 pending handle、旧事务迟到结果不能覆盖新事务。Steam Cloud 手动刷新/拉取/上传使用当前 launch profile 的 account root，拉取前在 `files/steam/cloud/<profile_id>/backups/` 创建备份。WebDAV 中心可配置 URL/用户名/密码/槽位、测试连接，并把同一 account root 的白名单存档同步到远端 `SlayTheSpire2/saves/<slot>/`；拉取前在 `files/webdav/cloud/<slot>/backups/` 创建备份。本地存档快照在 `files/save-snapshots/profiles/<profile_id>/` 默认保留最近 5 个，启动前/干净退出后会自动创建，设置页可手动创建和恢复。
+
+## 12. 维护提醒
+
+- 当前工程是“Android shell + payload/version manager + compat pack”的组合，不是传统 Android Studio `app/` 子模块结构；Gradle 根就在 `android/`。
+- 实际打包推荐用 `tools/package/*.sh`，不要裸跑 Gradle，除非已同步 runtime、准备好环境并理解 compat pack staging。
+- payload ZIP 工具必须用归一化名称对应的原始 `ZipInfo` 读取校验、依赖与重打包内容，兼容反斜杠及单顶层目录，不得归一化后再用新字符串查原 ZIP；重名归一化条目拒绝歧义。回归：`tools/package/test_payload_zip.py`。
+- 可公开 clone 的 GitHub 参考项目用 `tools/deps/prepare-external-projects.sh` 准备；清单在 `tools/deps/external-github-projects.json`。默认参考仓库包含 `SlayTheAmethystModded`、`WorkshopAndroidDownloader` 与 `StS2-Launcher_Mod_Manager`；该脚本不下载商业 payload、original DLL、keystore 或准备好的 Godot/Mono runtime。
+- Steam 游戏下载页“自定义”卡片在展开后切换“分支名 / Manifest”，Manifest 再切换“当前清单 / 手动输入”。自动列表只从 Steam appinfo 读取 Windows x64 depot `2868841` 的可见分支当前清单，不是历史目录，不抓取 SteamDB。精确 Manifest 请求不得回退最新版或混入其他 depot 快照，须保留无符号 64 位完整 ID、必要文件检查、续传/取消/独占锁。`source.steam.selection_mode` 区分 `branch` / `manifest`，`request_branch` 只表示授权上下文；手动 ID 的 `source.steam.branch` 留空，不能误导 Workshop 自动选分支。UI 查询绑定 generation，账号变更/销毁/开始下载时取消旧请求；列表刷新不能静默替换用户已选快照。说明见 `doc/plan/steam/steam-login-download-cloud-plan.md`，输入/平台边界回归为 `SteamPayloadManifestSelectionTest`。
+- 创意工坊“使用尖塔补给站下载”保存在 `sts2_steam_workshop.supply_station_enabled`，默认 `false`，只影响新开始的下载，不是 `settings.save` / C# 协议。开启后 `SpireSupplyStationClient` 直接提供 descriptor/CDN 授权，禁止读取 Steam refresh token 或强制先走 CM 分支解析；复用 `UgcWorkshopDownloader.downloadAuthorized` 和现有导入流程。`supply-station-default` 仅为站点默认内容的安装命名空间，必须标明游戏分支未验证，不能伪装成 `public` / `public-beta`；来源记录为 `spire_supply_station`。Steam 记录切到站点仍走冲突确认，站点记录在开关关闭时不自动访问站点更新。站点与 Steam 错误要区分：只有 Steam 授权失败提示开启功能，普通网络/文件权限失败不提示；关于图标必须位于开关左侧并保留说明、鸣谢、版权与外链。浏览/前置/更新元数据仍使用现有 Steam 路径，前置检查失败需用户显式确认后才允许只下载当前项。凭证不得写日志/metadata；刷新不能改变当前下载内容身份。说明见 `doc/modding/mod-and-compat-notes.md`，回归见 `SpireSupplyStationClientTest`。
+- `settings.save` 的 Android-only key 是 Java 附加设置与 Harmony patcher/Java 启动参数的协议；改 key 要同步 `ExtraSettingsRepository`、页面 UI、`AndroidSettingsBridge` 或 `GodotApp.getCommandLine()` 等消费者、相关 patches，并记录到 `.agent/agent-docs/changelog/`。`log_level`、`android_performance_overlay_enabled` 和 `android_display_refresh_rate_mode` 额外同步到 SharedPreferences，避免原版游戏保存 settings 时丢失这些 Android 字段。刷新率新字符串由 `AndroidSettingsMerge` 保留，旧高刷布尔值只在读取旧配置时迁移，不双写旧 key。
+- `<files>/default/<account>` 的账号选择逻辑与旧移植版兼容但较脆弱，多账号/自定义 platform player id 改动要同时检查 Java 与兼容 MOD。
+- 当前普通 MOD 目录由 launch profile 决定：`mods_mode=global` 使用 `<files>/mods`，`mods_mode=isolated` 使用 `<files>/instances/<profile_id>/mods`；MOD 导入先进入 cache staging 并按 manifest `id` 检测同 ID 冲突，用户选择“使用新 MOD”时才删除同 ID 原 MOD 后提交，避免两个同 ID 项目开关连体；随后普通本地/Nexus 导入按 staging 到 MOD 根的实际相对路径检测文件覆盖，若将覆盖不属于本次同 ID 替换的既有 `.dll` / `.pck` / `.json` 或资源文件，必须弹窗让用户明确确认后才提交，避免 A MOD 文件被 B MOD 静默替换；Workshop 下载也先进入 staging，但下载前会弹出分支/manifest 候选，最终以设置中的导入分组下 `<branch>/<published_file_id>/` 作为 item 边界，更新同一 item 时固定沿用已安装记录分支并直接覆盖同 ID 旧项；同一分支仍整体替换该目录，详情/删除/前置判断优先按 `<files>/workshop/library/index.json` 记录的 item 根目录执行；MOD 分组通过 `sts2_mod_profiles` 的 `mod_groups`、`hidden_mod_groups`、`mod_group_assignments`、`mod_group_order` 与 `mod_order` 维护，只影响启动器展示；拖拽、批量分组、重命名和删除分组不得改动 MOD 文件位置。旧 `.sts2_mod_group` 目录标记仅作为历史兼容读取。新增路径相关功能必须同步 Java 管理页、C# `AppPaths`、ModLoader patches 和迁移/备份逻辑。
+- MOD manifest 的 id/pck_name 及其受支持拼写只能是文件基名；导入预检必须在别名生成之前拒绝路径分隔符、控制字符和单独的 `.`/`..`。Java/C# 别名创建与删除还要校验同目录边界，不跟随清单/别名符号链接；不可把 ZIP Slip 检查当作 manifest 路径安全检查。回归：`android/test/com/godot/game/ModImportSafetyTest.java` 与 `port-mod/tests/ModManifestAlias.Tests`。
+- 本地存档快照、Steam Cloud 与 WebDAV 云存档同步必须使用当前 launch profile 的 account root：`save_mode=global` 使用 `<files>/default/<account>`，`save_mode=isolated` 使用 `<files>/instances/<profile_id>/default/<account>`；不要把存档功能固定写死到全局 `<files>/default/1`。WebDAV 只同步白名单 STS2 存档文件，远端不做删除镜像；`settings.save` 默认不同步，除非用户显式开启实验性开关。
+- 两套云同步的 baseline 只能推进已确认内容相同的文件，跳过上传/拉取及部分成功时必须保留未同步文件的共同祖先；旧 `local_sha1 != remote_sha1` 记录不可信，应按无共同基线要求显式选择。非强制拉取不得覆盖仅本地变化的文件。快照写 `.part` 后校验并发布，恢复时先验证中央目录、schema 1 清单、长度和 CRC，再做可回滚目录替换；staging/rollback 不得放在会被全局账号发现扫描的 `<files>/default/` 下，恢复失败不能裁剪旧恢复点。回归：`CloudSyncSafetyTest`（两 provider）与 `LocalSaveSnapshotSafetyTest`；运行 `tools/android/gradle-with-s2-env.sh testMonoReleaseUnitTest`，Robolectric 仅为测试依赖。
+- Steam Cloud 新上传使用 STS2 的裸 RemoteStorage SDK 文件名；不能自动加 `%GameInstall%/`（真实 STS2 请求返回 `NoMatch`）。远端清单若实际返回该前缀，本地映射需大小写不敏感并兼容斜杠，更新时保留原始远端名。非空上传计划必须在 `BeginAppUploadBatch.files_to_upload` 声明实际文件名，再逐文件 begin/transfer/commit，不保留“manual upload 空声明”别名。Steam/WebDAV 白名单均包括 `profile.save` 与 `modded/profile.save`；普通与 MOD namespace 不合并，PC 纯 UI MOD 也可能切到 modded。页面指向现有显式 MOD 存档转移工具并要求先备份；它不是内容转换器。回归：`SteamCloudPathMapperTest` / `CloudSyncSafetyTest`；真实账号只写随机临时文件，校验下载后删除并核对全部原有云记录未变化，凭据不入报告或提交。
+- Steam Cloud 的 DNS 预解析结果必须通过 `ServerRecord.createServer(host, port, WEB_SOCKET)` 分开传递地址和端口；禁止重新使用 JavaSteam 1.6.0 的 `createWebSocketServer(String)`，其冒号拆分会在 IPv6/NAT64 网络中把 `ff9b` 当成端口。`last-websocket-cm-endpoint.txt` 保留现有 `[IPv6]:port` / `IPv4:port` 格式，缓存与默认端点由 URI authority 解析后构造；不得改变服务器优先级或为此强制关闭 IPv6。回归：`SteamCloudEndpointTest`（IPv6 候选、缓存重载、IPv4 优先级及无端口 fallback）。
+- 多版本兼容包的长期方向是 manifest 化、可安装、可诊断，并作为启动配置属性选择；不要把某一游戏版本的兼容 patch 直接写死到 Android shell，也不要恢复全局兼容包 fallback 选择。
+- 已绑定兼容包的 manifest/target 存在但 DLL 或 overlay 缺失时，按缺失依赖走推荐 Sheet；复制前和 Godot 入口都须重新校验，不能用版本风险确认或 `launch_prepared=true` 绕过。兼容开关关闭的显式无兼容层路径保留。回归：`CompatLaunchReadinessTest`。
+- 对当前 `v0.111.0` target 改动时务必用 `ReferenceFlavor=original-v0.111.0` 与 `STS2_ORIGINAL_V1110_*` 原版引用编译；对共享 `v0.110.x` / `v0.109.x` target 分别用历史 `original-v0.110.0` / `original-v0.109.0` flavor 和 v0.110.1 / v0.109.1 引用；其余 target 使用各自 original flavor。默认验证路径是 `port-mod/tools/build-compat-matrix.sh` 的所有 active target compile gate。
+- 新增兼容 target 时需要同时增加：`.env.example` 中的 original reference 配置说明或 `ReferenceFlavor` 映射、`port-mod/targets/active/<target_id>/target.json`、必要的 target adapter/capability 或条件编译、文档版本矩阵、至少一次 importer APK 构建验证。只有需要保留 schema 1 旧发布包对照时，才额外新增/维护 `compat/*` legacy 分支、`compat_manifest.*.json` 与 `tools/android/bundled-compat-packs.json` 条目。
+- 性能维护：Workshop 搜索列表用 RecyclerView 回收卡片；图片按字节限制为 4–16 MiB LRU，最多 3 个加载任务，同 URL/尺寸合并并按目标尺寸采样，离屏取消、回收后阻止迟到结果。安装索引/目录扫描只在后台刷新 generation 快照；前置检查和详情操作仍后台检查真实文件，不能用 UI 缓存替代安全判断。`SteamWorkshopLibrary.recordInstall` 的内容 hash 不得放回索引锁内。
+- MOD 搜索快照包含归一化搜索文本、manifest mtime、展示分组与保存顺序 rank；不要在每次输入时重新计算依赖告警、读取文件时间或扫描分组目录。拖拽必须同步内存顺序/分组并失效旧扫描；展示分组不是运行时加载顺序。
+- `AndroidSettingsBridge` 以不可变快照支持安全的 `JsonElement` 生命周期，metadata 检查间隔 250ms；`InvalidateCache` 必须绕过间隔及相同 metadata，恢复前台/热设置的现有失效入口不能删除。legacy worktree 注入需包含 `AndroidSettingsBridge.cs`。日志面板在后台按 256 KiB 分批 tail，保留 UTF-8 半行并隔离旧会话回调；logcat 复用 16 KiB writer、250ms flush，E/F、停止和轮转立即 flush，旧 generation 不得污染新日志。回归：`InGameLogTailerTest` / `Sts2LogcatCollectorTest`。
+
+## 修改说明
+
+完成用户要求的修改后，请用脚本构建一个 importer 版本 APK，便于用户测试：
+
+```bash
+tools/package/build_importer_apk.sh
+```

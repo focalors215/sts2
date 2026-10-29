@@ -1,0 +1,189 @@
+<p align="center">
+  <img src="doc/images/icon.png" width="128" alt="App Icon">
+</p>
+
+<h1 align="center">Slay the Spire 2 Android 启动器</h1>
+
+<p align="center">
+  基于 Godot/Mono 运行时的非官方开源《杀戮尖塔2》移动端兼容层与启动器环境。
+</p>
+
+<p align="center">
+  <a href="https://github.com/ModinMobileSTS/Sts2MobileLauncher/blob/main/LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
+  </a>
+  <img src="https://img.shields.io/badge/Platform-Android_7.0+-brightgreen.svg" alt="Platform">
+  <img src="https://img.shields.io/badge/Godot-4.5_Mono-478CBF.svg" alt="Godot">
+</p>
+
+## 应用截图
+
+
+<p align="center">
+  <img src="doc/images/screenshot_1.jpg" width="24%" alt="首页仪表盘">
+  <img src="doc/images/screenshot_2.jpg" width="24%" alt="Steam 下载">
+  <img src="doc/images/screenshot_3.jpg" width="24%" alt="MOD 管理">
+  <img src="doc/images/screenshot_4.jpg" width="24%" alt="游戏内画面">
+</p>
+
+## 项目简介
+
+本项目是一个实验性的、非官方的《杀戮尖塔2》Android 移植与启动器框架。它**不包含**任何游戏本体文件，而是提供了一个 Android 运行外壳，让玩家能在手机上导入并运行自己合法拥有的 PC 版游戏文件，同时支持 MOD 加载、Steam 创意工坊公开浏览/下载记录（未登录时可匿名浏览公开条目，并默认启用兼容访问路径以绕过部分网络下 Steam Community 直连超时）、本地存档快照、Steam Cloud/WebDAV 云存档同步，以及关于页的启动器更新检查。
+
+**应用核心架构分为三层：**
+1. **Android 启动器外壳 (`android/`)：** 负责游戏数据的导入、Steam 账号登录与本体下载、Steam 创意工坊公开浏览/下载记录（含默认开启的兼容访问路径）、Steam 云存档同步、本地文件/MOD 管理，并在准备就绪后拉起 Godot 游戏进程。
+2. **Android 兼容包 (`port-mod/` 子模块)：** 作为底层 Hook（基于 Harmony），在游戏启动的最早期加载，用于拦截并修复 PC 版在 Android 上的各种水土不服（如输入适配、路径重定向、PC 专有 Shader 替换、MOD 加载器桥接等）。
+3. **游戏本体 (用户提供)：** 由用户通过导入 PC 版 `SlayTheSpire2.zip` 或在应用内登录 Steam 账号通过 SteamPipe 接口合法下载。
+
+Steam Cloud 与 WebDAV 会分别同步普通存档（`profile1–3/saves`）和 MOD 存档（`modded/profile1–3/saves`），以及各自的 `profile.save` 档位选择文件，不自动合并。PC 即使只装纯 UI／快速重开 MOD，也可能使用 MOD 存档目录。手机不使用 MOD 时，先备份两套存档，再视情况显式使用 **附加设置 → MOD存档转移 → MOD存档 → 普通存档**；此操作会覆盖目标档位，不能转换含 MOD 专属内容的存档。详见[存档路径映射](doc/plan/steam/steam-login-download-cloud-plan.md#102-本地路径映射)。
+
+自定义超过四人的联机人数仍属实验功能。full 兼容包现在会按实际数量动态创建宝箱遗物槽和休息点角色槽，并为第五位玩家提供安全默认焦点、分散宝箱奖励/剪刀石头布手势；这修复了五人宝箱在剪刀石头布后卡住的问题。其他原版界面仍可能存在四人假设，因此可配置容量不代表所有人数都已经过完整流程认证。
+在 Android 上，full 兼容包会补回 PC 本体场景中缺失的联机表情按钮。进入多人大厅后（包括角色选择/准备界面和显示中的等待面板），游戏正式开始前也会保留该按钮；按住右下角悬浮按钮并拖动选择原版表情轮盘的一项，松手后通过本体已有的反应同步器发送。轮盘按 viewport 坐标精确居中到按钮，并在响应式 Canvas/UI 尺寸变化后为每个选项保持稳定的未选中基准；被指向的选项仍保留原版向外强调动画，但转完一圈不再让整组项目向右下漂移。松手发送前还会把 viewport 中心逆变换到反应容器的 control 坐标，再交给原版本地动画和网络归一化路径，缩放 Canvas 下也能在正确位置看到发出的表情。“附加设置 → 系统 → 显示联机表情按钮”可实时控制显示，默认开启。
+兼容包还会用游戏自带本地化字体补齐 Godot 独立下拉弹窗（包括 `OptionButton` 的选项与分隔行）；部分三星 ROM 不会替这些弹窗可靠选择中文字体。此修复保留原字体与已有 fallback，也不额外打包游戏字体。
+
+---
+
+## 法律声明
+
+- **非官方作品：** 本项目为玩家社区开源的技术研究工程，不隶属于 Mega Crit、Slay the Spire 2 或 Godot 引擎官方，也不能代表其任何立场。
+- **不提供游戏资产：** 本仓库**绝对不包含**、也不分发任何受版权保护的商业游戏资源（包含但不限于音频、图像、PCK文件、DLL核心逻辑等）。
+- **合法使用：** 请遵守相关软件许可、平台规则和当地法律。您必须**合法拥有**《Slay the Spire 2》的 PC 副本，才能使用此工具在您自己的设备上运行游戏。
+- **禁止分发侵权 APK：** 请勿将打包了商业游戏资产的直装版 APK 用于公开发布或商业牟利。
+
+---
+
+## 鸣谢与参考项目
+
+本项目的诞生离不开开源社区的探索，特别感谢以下项目的启发与代码参考：
+
+- **[StS2-Launcher_Mod_Manager](https://github.com/iunius612/StS2-Launcher_Mod_Manager)**
+  提供了底层的 Godot/Mono 运行时剥离思路、Android 兼容补丁加载顺序以及部分构建脚本的设计参考。
+- **[SlayTheAmethystModded](https://github.com/ModinMobileSTS/SlayTheAmethystModded)**
+  STS1 的非官方移动端启动器。本作的 `steam-protocol` (Steam 协议)、`steam-content` (SteamPipe 游戏下载) 以及 Steam Cloud 云存档的逆向接入方案与源码主要移植/改编自该项目。
+- **[WorkshopAndroidDownloader](https://github.com/Apricityx/WorkshopAndroidDownloader)**
+  Android Steam 创意工坊下载器参考项目，用于本启动器的工坊浏览、下载和更新记录流程。
+- **[STS2-RitsuLib](https://github.com/BAKAOLC/STS2-RitsuLib) / [BaseLib-StS2](https://github.com/Alchyr/BaseLib-StS2)**
+  作为 Android 端 MOD 兼容性排查的重要测试基准参考库。
+- **[Google Material Symbols](https://fonts.google.com/icons)**
+  提供启动器 UI 使用的官方 Rounded 图标轮廓，并由 bundled 字体离线生成 Android vector drawable。
+- **[Android desugar_jdk_libs](https://github.com/google/desugar_jdk_libs)**
+  为 Android 7.x 设备提供包括 `java.time` 在内的 Java 8+ library API 兼容实现。
+
+*(详细的第三方开源协议，包括不会打入 APK 的 Kotlin Test/JUnit、[Robolectric](https://github.com/robolectric/robolectric)（启动器数据安全回归）与 OkHttp MockWebServer 测试依赖，见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md))*
+
+---
+
+## 核心安全说明
+
+为了您的设备与账号安全，使用及编译本应用时请务必注意：
+
+1. **ADB 与 Debuggable 风险：**
+   当前默认的 release 构建选项中**保留了 `debuggable=true`**（为了便于发生崩溃时抓取日志排查）。这意味着任何连接到您的手机并获得 `ADB` 权限的电脑或恶意软件，都能提取此应用的数据（包含加密保存的 Steam 凭据）。**请绝对不要将手机的 ADB 调试权限授予不可信的电脑或第三方应用市场。**
+2. **Steam 账号安全：**
+   - 本应用**绝不会**将您的 Steam 账号密码上传至任何第三方服务器。密码和本次登录输入的 Steam Guard 动态码只在内存中使用，不写入磁盘、Android service Intent 或日志。
+   - Steam 接受初始凭据请求后，启动器只会临时加密保存一个短期认证 transaction handle，用于中断后恢复；handle 会自动过期，只包含 Steam 路由与状态信息，不包含密码或本次动态码。
+   - `Refresh Token` 通过 Android 的 `EncryptedSharedPreferences` 加密保存在本地。
+   - 手机 App 确认出现后会立即开始轮询。您可以正常切到 Steam App 批准后再返回，不需要把启动器挂小窗或分屏；认证前台服务会尽量保持事务并在 Steam CM 断线后恢复，取消或过期则清理待处理事务。
+   - **强烈建议：** 只使用从可信源码自行编译或可信渠道获取的 APK 登录 Steam。
+3. **恶意 MOD 风险：**
+   《杀戮尖塔2》的 MOD 本质上是任意执行的 C# 代码。**恶意 MOD 可以绕过沙盒直接读取您手机上的本地文件（包括存有 Steam Token 的配置）**。在尝试安装来源不明的未知 MOD 之前，**请务必在设置中退出 Steam 登录**，以防账号被盗。
+
+---
+
+## 如何构建本项目 (APK打包)
+
+> **提示:** 完整的环境配置与参数说明请查阅 [`doc/build/building-and-packaging.md`](doc/build/building-and-packaging.md)。
+
+### 1. 环境准备
+- **操作系统:** Linux / macOS / WSL (Windows)
+- **工具链:** 
+  - JDK 17+
+  - Android SDK (API 35) & NDK
+  - .NET SDK (用于编译 C# 兼容插件)
+  - Python 3
+
+### 2. 获取源码
+因为包含了兼容包子模块，克隆时请带上 `--recursive` 参数：
+```bash
+git clone --recursive https://github.com/ModinMobileSTS/Sts2MobileLauncher.git
+cd Sts2MobileLauncher
+```
+
+### 3. 配置本地环境
+复制环境变量模板，并根据你的本机实际路径修改 `.env` 文件：
+```bash
+cp .env.example .env
+cp local.properties.example local.properties
+```
+> **注意：** `.env` 文件中必须配置好 `JAVA_HOME`、`ANDROID_HOME`、`DOTNET_BIN`，以及用于编译兼容包的原版 PC DLL 引用路径 (`STS2_ORIGINAL_*_REFERENCE_DIR`)。
+
+### 4. 同步运行时与依赖
+运行以下脚本，将大型的运行时产物（Godot模板、FMOD等）提取到指定位置（这些文件被 git ignore，需本地生成）：
+```bash
+tools/android/sync-runtime-from-references.sh
+```
+Android FMOD 引擎与 Godot 原生桥需与 PC 本体的 2.03.06 配套：AAR 同级的 `arm64/` 应包含对应库；若路径不同，可在 `.env` 指定 `STS2_FMOD_ANDROID_LIBS_DIR`。脚本会拒绝旧版或混搭库，不会再次把旧参考库打进 APK。详见 [`doc/build/building-and-packaging.md`](doc/build/building-and-packaging.md)。
+
+### 5. 编译兼容包 (Compat Packs)
+将 full compatibility family 包和通用 offline bootstrap 一并构建并放入 Assets：
+```bash
+tools/android/stage-bundled-compat-artifacts.sh
+```
+现在默认会从单个 checkout 构建 schema 2 扁平化 full family 包，并同时构建最低优先级的通用离线保底包。离线包的 wildcard 只代表允许尽力尝试，不是任意未来版本的兼容保证；probe v2 只接管已理解的运行时 API 形状，在真实 ModelDb 初始化成功后才标记通过，并避免已知失败的相同 pack/version/payload SHA 组合再次自动选中。可单独运行 `offline-bootstrap/tools/test-offline-contract.sh`，验证合成 API 变更和本机已配置的所有原版引用。
+
+当前启动配置没有可用兼容包时，点击启动不再只显示错误，而会打开推荐 Bottom Sheet：先推荐与当前本体匹配的内置或已安装 full target；只有没有 full target 命中时，才提供通用离线兜底。用户点“使用推荐并继续”后才会修改当前启动配置，也可以直接从面板进入兼容包管理。
+
+只构建 full family 包可运行 `tools/android/stage-bundled-compat-packs.sh`。legacy 分版本分支包仍可用于诊断：
+```bash
+COMPAT_PACK_BUILD_MODE=legacy tools/android/stage-bundled-compat-packs.sh
+```
+
+### 6. 构建导入版 APK
+执行构建脚本。这将会输出一个**不包含**游戏本体的 “导入版 APK”（推荐的合规分发方式）：
+```bash
+tools/package/build_importer_apk.sh
+```
+构建成功后，APK 将输出至 `dist/sts2-re-importer.apk`。
+
+正常 APK 内置 Android 高刷新兼容路径：应用会声明游戏分类以便 OEM 游戏/GPU
+调度识别 `GodotApp`，但只在游戏处于前台、获得焦点且渲染 `Surface`
+有效时请求当前屏幕的最高兼容刷新率。请求按 Activity 生命周期合并，
+游戏暂停或 `Surface` 销毁后会取消未完成工作；Android 12+ 对每个有效
+Surface epoch 只发出一次 `Surface.setFrameRate(..., CHANGE_FRAME_RATE_ALWAYS)`，
+若 Android 提供对应高刷 mode 则设置精确 `Window` display mode；若只提供
+alternative refresh rate，则清空精确 mode ID 并只请求目标刷新率。随后做有界延迟验证；不使用
+`SurfaceControl`。
+可在“附加设置 → 系统”的预加载下方关闭高刷新请求；同一分区也提供
+默认关闭的性能面板。
+
+全屏渲染分辨率会由 full compat 在游戏启动时应用，也可以在游戏内 Android
+设置页即时切换。根 Window 始终保留 Godot `CanvasItems` 逻辑缩放，只改变
+renderer 侧渲染目标，因此卡牌、控件、触控坐标和其他内容的相对布局保持不变。
+实际目标会跟随当前 CanvasItems 画面比例，例如 `2400×1080` attachment 选择
+`1280×720` 时实际使用 `1600×720`。该路径不改变 Android Surface 尺寸，也不
+重新触发高刷请求；画面比例、UI 缩放、全局缩放和字体缩放继续各自独立生效。
+
+“附加设置 → 画面 → 画面细项 → 旋转模式”新增可选的**竖屏（需配合竖屏 MOD）**。
+默认仍为“跟随系统”的横屏模式，不会自动开启竖屏；请先自行安装并启用兼容的竖屏 UI
+MOD，启动器不内置竖屏界面。配合更新后的 full compat，竖屏逻辑画布以 1080 为宽度，
+高度跟随实际竖屏画面比例。原先的横屏比例和 UI 缩放选择保留，但竖屏期间不覆盖该画布；
+游戏缩放与字体缩放仍独立生效。切回横屏后恢复保存的比例/UI 缩放，渲染分辨率仍是独立设置。
+
+### 7. Windows 启动器
+`windows/` 是 Windows 版启动器（Electron），界面与 Android、iPad 启动器同为「喵喵零和小鱼的小屋」。Windows 直接运行 PC 原版游戏，启动器负责找到游戏（Steam 库或手动目录）、通过 `settings.save` 管理 MOD、存档快照并启动游戏。只需要 Node.js 22：
+```bash
+tools/package/build_windows_launcher.sh
+```
+详见 [`windows/README.md`](windows/README.md)。
+
+
+---
+
+## 更多文档
+
+如果您想参与开发、了解兼容包的运作原理或更深入的架构设计，请查阅 `doc/` 目录：
+
+- [项目结构与版本模型](doc/architecture/project-structure.md)
+- [构建与打包详细指南](doc/build/building-and-packaging.md)
+- [运行时加载与兼容包生命周期](doc/runtime/compat-pack-loading-flow.md)
+- [MOD 兼容补丁开发注意事项](doc/modding/mod-and-compat-notes.md)

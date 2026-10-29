@@ -1,0 +1,310 @@
+# 普通 MOD 与 Android 兼容包维护说明
+
+## 1. 两类“MOD”不要混淆
+
+本项目里有两类扩展：
+
+1. **Android compat pack**
+   - 由 launcher/Godot runtime 早期加载。
+   - 包含 `STS2Mobile.dll` 与 `port_compat.pck`。
+   - 负责 patch 平台、路径、设置、输入、shader、LAN、普通 MOD loader。
+   - 不放在 `<files>/mods`，不由原版 `ModManager` 作为普通 MOD 加载。
+2. **普通用户 MOD**
+   - 用户安装到当前 launch profile 解析出的 MOD 目录：全局模式为 `<files>/mods/`，隔离模式为 `<files>/instances/<profile_id>/mods/`。
+   - 由被 compat pack patch 后的原版 `ModManager` 扫描、排序和加载。
+   - 是否启用由当前 profile 的 `settings.save` 中的 MOD 设置/附加设置页控制。
+
+## 2. 普通 MOD 目录和 manifest
+
+当前普通 MOD 根目录由“版本”页选中的 launch profile 决定：
+
+```text
+# mods_mode=global
+<files>/mods
+
+# mods_mode=isolated
+<files>/instances/<profile_id>/mods
+```
+
+`ModLoaderPatches` 会通过 `AppPaths.ModsDir` 递归扫描该目录。为兼容当前 PC `ModManager` 的 manifest 规则，会把：
+
+```text
+mod_manifest.json
+```
+
+运行时规范化为：
+
+```text
+<ModId>.json
+```
+
+并添加 `android_generated_manifest_alias=true`，必要时删除重复的 `mod_manifest.json`。
+
+### 2.1 原生用户目录与 MOD 自有配置
+
+启动器在 `Sts2Application.onCreate()`、Godot/Mono 启动之前，通过 `AndroidRuntimeEnvironment` 将原生进程环境变量 `HOME` 设为应用私有 `<files>`，先创建并写探测 `<files>/.config/`；现有 `TMPDIR` / `TMP` / `TEMP` 继续指向 `<files>/tmp/`。HOME 与 temp 分别初始化，HOME 失败不会阻止 temp 配置，后续启动准备或 Godot Activity 入口可重试未完成的部分。成功配置在同一进程内复用，不跟随启动配置切换。
+
+当前打包的 Mono 用 `HOME/.config` 解析 `Environment.SpecialFolder.ApplicationData`，不读取 `XDG_CONFIG_HOME`。因此直接使用这一标准 .NET API 的普通 MOD 不再向 Android 系统用户目录 `/data/.config` 写入；例如 Colorless Run 0.9.0 的配置与日志分别位于：
+
+```text
+<files>/.config/SlayTheSpire2/ColorlessRun.json
+<files>/.config/SlayTheSpire2/logs/mod_log.txt
+```
+
+这是启动器的通用运行环境兼容，不修改 MOD DLL，也不需要扩大存储权限。该目录为应用级共享 MOD 数据，不自动继承 `save_mode=isolated`，不改变原版游戏存档的 profile 路径，也不自动纳入存档快照/云同步。Mono 会缓存环境与特殊目录；MOD 静态构造失败的旧进程必须退出并重新启动，不能仅返回设置页后在同一进程重试。这一措施只解决标准用户目录问题，不保证某个 MOD 的其他 API、资源或玩法已经兼容 Android。
+
+## 3. MOD 管理界面与导入冲突处理
+
+`ModsPage` 采用紧凑 Material 3 顶栏：顶部为 MOD 总开关和药丸搜索框，导入、分组、创意工坊、排序、筛选、MOD 方案入口统一放在可横向滚动的 Chip 操作组中。NexusMods 商店 Activity 仍保留在工程内，但主 MOD 页入口暂时隐藏。
+
+MOD 卡片默认折叠，只显示左侧拖拽手柄、名称、版本/作者和启用开关；展开后显示完整描述、分类、可点击跳转文件浏览器的清单路径（主题色+下划线）、作者、依赖、最低游戏版本，以及右下角图标按钮：选中、备注、信息、删除；超长描述默认截断到 10 行并提供“显示更多”。可为每个 MOD 设置本地显示备注名（保存在 `sts2_mod_profiles` 的 `mod_notes`，只用于启动器 UI），有备注时卡片主标题显示备注名，原名显示在版本号前的元信息行中。启动器会自动探查清单 `dependencies`、`min_game_version`、`has_pck`/`has_dll` 与对应文件、以及 `settings.save` 中原版 `ModSettings.ModList` 平面手工顺序是否把被依赖 MOD 排在依赖它的 MOD 之后：有问题时该 MOD 卡片以黄色描边高亮，AppBar 标题旁显示黄色警告图标与问题 MOD 数量，点击打开 BottomSheet；问题列表按紧凑 MOD 卡片展示名称、版本/作者和逐条警告，警告正文为白色且缺失依赖等关键对象用红色高亮。若存在顺序问题，BottomSheet 提供“自动修复加载顺序”按钮（按原版 `ModManager.SortModList` 的依赖拓扑规则重写平面 `mod_list`，不改分组顺序）。MOD 列表按“前置库 / 内容模组 / 用户新建分组 / 未分组”分区，分组右侧可收起/展开。长按卡片左侧手柄可跨分组或组内拖拽排序，长按分组 header 可移动整个分组；拖拽开始会触发一次轻微震动反馈，列表中会插入半透明虚线 ghost 占位并用 LayoutTransition 平滑让位。用户新建、重命名、删除分组以及把 MOD 分到某组只会更新本地 `sts2_mod_profiles` SharedPreferences 中的 `mod_groups`、`hidden_mod_groups`、`mod_group_assignments`、`mod_group_order` 与 `mod_order`，不会创建、重命名、删除或移动 MOD 文件/目录。旧版本遗留的 `.sts2_mod_group` 标记目录仍会作为初始 UI 分组兼容读取；删除或重命名这类旧分组时只写隐藏/映射元数据，不改真实路径。游戏进程内读取的是 `settings.save` 的平面 `mod_list`，并仍会按原版 `ModManager` 再做依赖拓扑排序。
+
+为避免大量 MOD 时列表滚动被隐藏内容拖慢，启动器只在用户首次展开卡片时创建描述、依赖、路径和操作按钮等详情 View；默认折叠卡片的 RecyclerView 绑定只更新摘要行。MOD manifest 目录遍历、JSON 解析、备注与启动配置版本读取在低优先级单线程后台执行，搜索、筛选和排序直接复用内存快照并通过差量列表更新提交，不在每次输入或切换时重新扫描磁盘。
+
+快照同时预计算含备注/描述/依赖的归一化搜索文本、manifest 修改时间、展示分组与保存顺序的 rank 索引。搜索不再重建依赖告警、不在比较器中反复查询文件时间或线性查找排序位置；清单刷新、备注修改、启停和加载顺序修复仍会更新对应状态。拖拽立即同步内存分组/顺序快照；UI 分组调整不重新计算无关的原版加载顺序告警。
+
+- 搜索或筛选后的拖拽按完整分组顺序做单项移动，不用可见子集覆盖保存顺序；未显示项保持相对顺序，跨组同时保留来源与目标组的隐藏项，原位或无效落点不改顺序。
+- 分组拖拽的落点始终使用全局分组序号；列表前方 header 被 RecyclerView 回收后，屏内 ghost 与最终落地位置仍对应同一组。
+- “区间选择”按当前实际显示的 MOD 行及手工排序计算，跳过 header、ghost 和折叠组内容；既有显式隐藏选择保留，但不作为视觉区间端点。全选/反选仍保留原先包含折叠组内已过滤条目的范围。
+
+导入 MOD 时，Android shell 会先把选择的 zip/文件解包到 cache staging 目录并解析 manifest。如果发现新导入 manifest 的 `id` 与已安装 MOD 相同，会弹出冲突 Dialog，说明“连体现象”：界面可能显示两个项目，但任何一个开关都会按同 ID 同时影响两个。Dialog 会用信息卡分别展示原 MOD 和新 MOD，用户可选择保留原 MOD（丢弃本次 staging）或使用新 MOD（删除同 ID 原 MOD 后提交 staging）。该规则同样服务 Nexus 下载导入路径，避免同 ID manifest 在 `<files>/mods` 或隔离 MOD 根中长期并存。
+
+同 ID 冲突处理后，普通本地/Nexus 导入流程还会按 staging 到当前 MOD 根目录的实际相对路径预检文件覆盖。如果新导入内容会写入已经存在的 `.dll` / `.pck` / `.json` 或其它资源文件，且这些文件不属于用户刚确认替换的同 ID 旧 MOD，会再次弹出“文件覆盖”警告，列出会被覆盖的相对路径和可推断的现有归属；默认取消/保留已安装文件，只有用户明确选择替换时才继续。底层普通提交接口默认不允许未确认的路径覆盖，避免把 A MOD 的 DLL/PCK 静默替换成 B MOD 的文件；创意工坊导入则固定提交到对应 `published_file_id` item 目录，更新同一 item 时整体替换该目录。
+
+别名安全边界：manifest 的 `id` / `mod_id` / `modId` / `ID` 与 `pck_name` 的受支持拼写只能提供文件基名，不能含目录分隔符、控制字符、Windows 路径特殊字符或单独的 `.` / `..`；不改变合法 Unicode、点号、连字符名称。导入在别名生成和冲突确认前拒绝不安全名称；启动器清单扫描及 full compat 别名扫描不跟随符号链接，Java 与 full compat 的文件别名创建/删除再次校验同目录约束。该规则只限制导入与别名文件操作，不把普通 C# MOD 变成沙箱代码。运行时回归入口为 `port-mod/tests/ModManifestAlias.Tests`。
+
+### 3.1 三星 ROM 下拉菜单字体 fallback
+
+`AndroidFontCoveragePatches` 在原版本地化初始化后，用 `FontManager` 当前语言字体为现有控件及后续新增节点设置显式 fallback。Godot 的 `PopupMenu` 是独立 `Window`，不属于其 `OptionButton` 的普通 `Control` 子树；因此补丁也单独包装 PopupMenu 的 `font` / `font_separator` 主题字体，并在处理 `OptionButton` 时覆盖其 `GetPopup()` 下拉菜单。保留各自基底字体和已有 fallback，不复制游戏字体到 overlay；新增节点仍只走 `SceneTree.NodeAdded` 单节点处理，不在热 `Node.AddChild` 路径递归扫描。
+
+## 4. Steam 创意工坊导入与更新记录
+
+`SteamWorkshopActivity` 不单独保存 Workshop 账号。MOD 页“创意工坊”按钮会打开塔2创意工坊页面；未登录 Steam 时通过 Steam Community 公开 Workshop 页面匿名展示公开条目，已登录时优先复用 Steam 中心的加密 refresh token 和 SteamID64 走 Steam CM 查询，缺少 SteamID64 时会验证 refresh token 补齐，失败时回落到公开浏览。页面使用列表、详情、已下载、设置四屏结构；侧栏支持热门、最新发布、最近更新、最多订阅排序，以及本周、30 天、3 个月、6 个月、一年、全部时间筛选，侧栏内容可滚动，并显示 Steam 中心登录账号/SteamID64 或匿名状态。列表预览图、详情截图、描述和前置 MOD 均从真实 Steam 公开页面/API 读取；列表靠近底部时自动加载下一页并追加条目，截图优先取详情页原图链接，图片请求会在兼容访问、原始域名和强制兼容访问之间重试，兼容访问也覆盖常见 Steam 图片媒体域。页面支持搜索、通过已知 Workshop ID/URL 直接打开条目、打开 Steam 网页、后台下载并导入条目、查看“下载中 / 已下载”列表、从已下载页 AppBar 手动检查更新，以及设置下载导入分组、创意工坊兼容访问和 UGC 分块并发数；搜索框粘贴纯数字 ID 或 Workshop URL 时也会直接进入应用内详情。创意工坊设置页提供“下载分支”：默认 `auto`，自动优先使用 Steam 下载 payload 时记录的 `source.steam.branch`，其次使用当前启动配置兼容包 manifest target 上的 `steam_branch`，两者都没有时才在下载前询问；也可固定为 `public`、`public-beta`、自定义分支或“每次询问”。下载器通过 `PublishedFile.GetItemInfo#1` 读取 author snapshots；若该接口没有返回 snapshots，则继续用 `PublishedFile.GetChangeHistory#1` 从 saved snapshot 历史中提取 branch min/max 与 manifest。固定分支或 `auto` 已能推断分支时会直接进入后台下载，manifest/depot/request code 在下载任务内部解析，避免一键队列被 UI 级分支解析串行阻塞；设置为“每次询问”或自动无法推断时才弹出分支/manifest 候选 Dialog；候选项展示 branch、manifest、depot、snapshot 时间、branch min/max、解析来源和 fallback 原因；当 Steam 只暴露默认 manifest 而没有分支快照时，Dialog/自动解析会额外派生目标分支的“按分支请求默认 manifest”候选，不把它标成已确认的分支快照；若 CM snapshot、change history 和默认 manifest 都不可用，则保留 WebAPI `hcontent_file` / `file_url` fallback 候选。
+
+公开列表解析兼容传统 `workshopItem` HTML、旧 `window.SSR.renderContext=JSON.parse(...)` 和新版 `<script id="valve-ssr-data" type="application/json">` 数据块。新版数据块优先读取，其 JSON 正文直接解析 `renderContext.queryData`，不先做 HTML 实体或 JavaScript 字符串反转义；作者、条目元数据和分页总数仍来自同一份 Steam 查询数据。新版数据块中的合法空结果不会回落到旧内联数据。直连与“创意工坊兼容访问”共用此解析逻辑，切换访问路径不能解决旧解析器与新版页面格式不匹配导致的空列表。回归：`SteamWorkshopBrowseParsingTest`。
+
+侧栏新增 **已订阅MOD**，仅在 Steam 中心已有登录记录时显示；“全部MOD”可切回普通浏览，“已下载”仍只表示本机下载/安装记录。订阅列表通过当前账号的 Steam CM 会话调用 `PublishedFile.GetUserFiles#1`（`type=mysubscriptions`、`appid=2868840`），按订阅时间读取塔2条目，并在接近底部时自动分页。它不使用普通浏览的热门排序或时间筛选；查询失败明确显示错误，不回落成公开浏览结果。未订阅任何条目时显示专用空状态。
+
+订阅条目复用现有卡片、详情页和下载按钮，沿用前置检查、下载分支选择及当前 launch profile MOD 目录的导入流程；查看列表不会自动下载，也不会修改 Steam 订阅关系。注销或切换账号会清空旧订阅列表，并拒绝旧账号/旧分页请求的迟到结果；再次进入时重新查询当前账号。分页结束按服务端总数和已请求页位置判断，不因过滤掉不可用条目而提前结束。
+
+搜索列表使用 RecyclerView 回收离屏卡片，分页只追加数据和新增行。图片采用 4–16 MiB（按应用堆上限调整）的字节计量 LRU、最多 3 个同时进行的加载任务、同 URL/目标尺寸请求合并，以及按目标尺寸采样解码；离屏目标取消等待中的请求，回收/销毁后不能收到错位图片。原图来源及兼容访问重试顺序不变。安装索引和 item 目录检查由低优先级单线程生成界面快照，恢复页面、安装、删除和更新检查后刷新；迟到快照不覆盖新状态。下载前置检查及本地 MOD 详情仍在后台按真实文件重新检查，不以 UI 快照代替下载安全边界。安装内容 SHA-1 计算不再持有索引锁，提交时重新读取最新索引后合并。
+
+详情页的预览图和截图点击后在应用内打开图片查看器，不再直接跳转浏览器。查看器支持双指缩放、单指拖动查看大图；长按图片可选择保存到系统相册或通过 Android 分享面板分享。图片仍沿用创意工坊兼容访问和原始地址重试策略，查看器使用临时缓存文件解码，不把压缩响应长期保留在内存中。
+
+创意工坊下载先加载 Steam 详情页的 `RequiredItems`，用 `<files>/workshop/library/index.json` 中记录的 `published_file_id` 与当前 launch profile MOD 根下对应 item 目录内真实存在的 MOD manifest 对照；若前置 item 未安装或本地文件已缺失，会弹出前置列表，用户可取消、只下载当前条目，或把缺失前置和当前条目放入队列一键下载。每个队列项仍先落到 `<files>/workshop/downloads/<published_file_id>-<uuid>/`，下载线程在后台运行，列表/详情按钮会立即显示圆形进度环和居中的方形停止按钮，下载页实时显示“下载中”；下载完成后调用 `ExtraSettingsRepository.prepareDownloadedModDirectory()` 把下载目录复制到 MOD 导入 staging，并检查 incoming MOD ID 是否与 item 目录外的已安装 MOD 冲突。提交成功后，启动器会把该 Workshop item 安装到设置中的导入分组（默认 `workshop`）下的 `<branch>/<published_file_id>/` 目录，更新同一 item 时固定沿用已安装记录的分支并直接覆盖同 ID 旧项，不再弹出覆盖确认；同一分支仍整体替换该目录，并在 `<files>/workshop/library/index.json` 按 `published_file_id@workshop_branch` 记录 `published_file_id`、`workshop_branch`、resolved manifest、解析来源、匹配 branch min/max、远端更新时间、导入的 MOD ID、item 安装根目录、大小和内容 SHA-1 摘要；导入成功的原始 `<files>/workshop/downloads/<published_file_id>-<uuid>/` 下载目录会立即静默删除，启动器/创意工坊页还会每天最多一次静默清理残留下载 staging；若记录已是当前版本且 item 目录仍能找到本地 MOD，列表/详情下载按钮会变为“详细信息”，点击后打开该 item 目录内 MOD 的本地详情；已下载页条目卡片和条目图标按钮会进入应用内 Workshop 详情，而不是跳转到 Steam App；若只有下载记录但 item 目录已找不到 MOD manifest，则显示本地文件已删除并把按钮改为重新下载。已下载页可删除单条下载记录，删除时可勾选同时删除对应 `published_file_id` item 目录。更新检查通过 Steam published file details 获取远端 `time_updated`，与记录的安装远端更新时间比较，标记 `available` / `current` / `failed`；重新下载更新固定沿用已安装记录分支，直接替换旧项；索引会隐藏并淘汰加分支前的 legacy 记录，避免更新后继续显示旧记录。
+已下载页同样使用 RecyclerView adapter，只为可见行创建活动下载卡片和已安装卡片，不再把全部记录一次性挂到 LinearLayout；索引刷新在后台解析当前 launch profile 的 MOD 作用域，并区分已安装、记录缺失、目录属于其他作用域和目录存在但 manifest 不完整。旧索引没有作用域字段时按安装根路径迁移到 `global` 或 `profile:<id>`，已有现代作用域记录会淘汰对应未作用域旧记录。更新提交先把旧 item 目录原子移到同级备份，再发布 staging 目录；提交失败恢复备份，进程重启时会清理/恢复遗留事务目录，避免更新后索引与本地文件脱节。
+
+- 页面忙于前置检查等操作时，新下载点击明确提示稍后重试，不先生成没有 worker 的转圈任务；已经开始的下载仍可通过原停止按钮取消。
+- 一键下载前置只合并队列，不清空已有等待项；保留已有请求的相对顺序、分支/manifest 与更新身份，新前置放在对应待下载条目前。相同 item 的另一显式分支等待当前安装结束，不因 item ID 相同而丢弃。
+- author snapshot、saved history 与 WebAPI 的 manifest ID 全程按无符号 64 位保存，包括最高位为 1 的值；零值、null 或缺字段不产生 manifest 候选，候选优先级不变。
+- 更新只比较新远端更新时间与安装时记录的远端水位，不与手机本地安装时间取最大值；手机快钟或下载期间发布的更新不会因此被遮盖。未知远端水位不宣称有更新，本地安装时间仍用于展示排序。
+
+创意工坊下载实现参考 `Apricityx/WorkshopAndroidDownloader`：公开 `file_url` 走直链下载，UGC manifest 路径走 SteamPipe CDN chunk 下载；当用户在分支候选中选择 author snapshot 或默认 manifest fallback 时，下载器使用该候选的 manifest，并把对应 branch 传给 `ContentServerDirectory.GetManifestRequestCode#1`；未登录时下载器会尝试匿名 Steam 会话和公开 CDN 回退，部分公开 MOD 可直接下载，受限/需拥有权限的条目仍可能要求登录。后台下载线程使用低优先级，直链和 UGC 路径都会合并进度事件；UGC 分块下载默认并发 2，设置页可调 1-8。默认开启的“创意工坊兼容访问”会把 `steamcommunity.com`、常见 Steam 图片媒体域和 `api.steampowered.com` 请求转到参考项目同款 `steamcommunity.rmbgame.net` / `steamstore.rmbgame.net` 路径，并保留逻辑 Host；UGC manifest/chunk 下载沿用参考项目的 SteamPipe CDN 处理，允许 Steam 内容目录返回的 HTTP-only CDN endpoint，并跟随这些区域内容节点返回的 HTTP(S) 301/302 等跳转。共享 CDN transport 必须先走 Steam 指定 proxy 再回退 origin；Workshop 下载调用方采用连接/读取/写入/整次请求 `25/75/75/120s` 的折中超时，共享 transport 不得用本体下载策略覆盖它；depot token 只用于 SteamPipe 内容节点及其重定向目标，不进入 Community/API 的 rmbgame 兼容访问；Android network security 继续允许 Steam 内容目录动态返回的明文 endpoint。关闭后只使用原始 Steam 域名和普通 SteamPipe CDN 行为。当前 UI 只把成功下载出的文件作为普通用户 MOD 导入，不恢复游戏进程内的桌面 Steam Workshop 枚举。
+
+### 4.1 可选的尖塔补给站下载
+
+“创意工坊 → 设置”新增 **使用尖塔补给站下载**，说明为“使用apricityx的尖塔补给站实现不登录匿名下载”，默认关闭。开关左侧的“关于”图标可查看服务说明、鸣谢、版权声明，并跳转 [尖塔补给站](https://workshop.apricityx.top)、[关于页面](https://workshop.apricityx.top/about)、[版权声明](https://workshop.apricityx.top/legal/copyright) 和 [用户协议](https://workshop.apricityx.top/legal/terms)。
+
+- 开启后，新开始的下载直接通过 `SpireSupplyStationClient` 获取下载描述与短期 CDN 授权，不读取 Steam 登录令牌，不建立 Steam CM 会话，也不先解析 Steam 分支。UGC 文件仍经现有 Kotlin manifest/chunk 解密、解压、校验和 staging 导入流程；不安装或执行站点的浏览器脚本。关闭时保留原 Steam 下载路径，不自动回退或切源。
+- 站点目前提供默认内容，**游戏分支未验证**。“下载分支”偏好会保留，但不控制站点文件。安装命名空间固定为 `supply-station-default`，记录 `resolution_source=spire_supply_station` 和实际 manifest；这个名字不是 Steam 分支或版本兼容认证，已下载卡片会明确显示来源与限制。
+- Steam 源记录改用站点下载时仍进行同 ID 冲突确认，不把未知分支当作原记录直接覆盖；站点自身的更新沿用站点命名空间。开关关闭后，站点记录的更新会提示重新开启，或从条目页面改走 Steam 并选择分支。
+- 浏览、截图、前置 MOD 检查和常规更新检查仍沿用现有 Steam 公开元数据路径，此开关不是浏览目录换源。前置列表读取失败时，只有站点模式提供明确的“检查未完成”提示，用户确认后可只下载当前条目；不能把检查失败解释为无依赖。
+- Steam 下载的 401/403、`NoLicense`、`AccessDenied` 等授权错误会提示可在设置中开启该功能；普通网络或本地文件权限错误不添加该引导。站点自身授权失败不误报为用户需要登录 Steam。
+- CDN token、depot key、request code 与签名 URL 不写入安装 metadata 或下载日志；授权刷新时校验内容身份，不能在同一任务混用不同 manifest。站点及 CDN 的 TLS 校验保持开启。服务不保证所有条目可匿名下载；使用和分发仍需遵守 Steam、站点及 MOD 作者许可。
+- 站点下载描述或 CDN token 回应可能把 CDN origin 标为 `http://`；启动器仅把它当作同主机端点标识，校验主机/端口/路径后仍经 HTTPS 443 请求 manifest/chunk，站点专用 CDN transport 不跟随 HTTPS→HTTP 降级重定向。HTTPS 证书无效或主机不支持 TLS 时会尝试其他合法端点，不改用明文；普通 Steam 源的重定向策略不变。
+
+回归入口：`tools/android/gradle-with-s2-env.sh :steam-content:test`，覆盖关闭时不访问站点、开启时不访问 Steam CM、加密下载及凭证刷新、错误条目/内容变更拒绝、授权错误识别。
+
+## 5. NexusMods 商店导入
+
+`NexusModsStoreActivity` 仍作为实验性页面保留，但 `ModsPage` 暂时不展示入口。后续重新开放时需继续遵循：
+
+- 用户必须手动输入并保存自己的 NexusMods Personal API Key；获取教程入口指向 <https://www.nexusmods.com/settings/api-keys>，提示用户滑到页面底部并点击 “Request Personal API Key”。
+- API Key 存在 Android 私有 `SharedPreferences`（`sts2_nexus_mod_store`）中，不写入仓库、不导出到构建产物。
+- 默认游戏域名为 `slaythespire2`。官方 API 没有完整全站文本搜索接口，因此关键词搜索会聚合并筛选 trending/latest/updated feed；输入 Nexus MOD URL 或数字 MOD ID 会走精确查询。
+- 下载流程会获取 NexusMods 文件列表，选择文件后尝试生成下载链接并把下载到的 ZIP 先交给 `ExtraSettingsRepository.prepareDownloadedModImport()` 解包到 staging；若触发同 ID 或路径覆盖冲突，会复用本地导入弹窗，确认后再提交到当前 launch profile 的 MOD 目录并启用 MOD 总开关。
+- NexusMods 对非 Premium 用户可能要求先访问网页；此时界面会引导打开网页并支持粘贴 `nxm://...key=...&expires=...` 链接重试下载。
+
+## 6. MOD 启用/禁用协议
+
+Java 附加设置页通过 `ExtraSettingsRepository` 写入当前 launch profile 的 settings：
+
+```text
+# save_mode=global
+<files>/default/1/settings.save
+
+# save_mode=isolated
+<files>/instances/<profile_id>/default/1/settings.save
+```
+
+兼容层中的 `AppPaths` / `SavePathPatches` 会把原版 `UserDataPathProvider` 指向当前 profile 的 account root；`AndroidSettingsBridge` / `AndroidSettingsPatches` 通过 `AppPaths.SettingsPath` 读取 companion JSON，将 Android-only 字段投影到当前游戏版本的 `ModSettings`：
+
+- `mod_settings.mods_enabled`
+- `mod_list[]`
+- legacy `disabled_mods[]`
+
+`AndroidSettingsBridge` 缓存不可变 JSON 快照及键索引，按单调时钟每 250ms 至多检查一次文件时间与长度；热路径不再为每个 getter 创建 `FileInfo` 或拼接路径。写入、恢复前台和现有热设置入口仍通过 `InvalidateCache()` 强制下一次读取刷新，包括时间和长度相同的更新。调用者持有的 `JsonElement` 在后续刷新后仍有效；外部写入尚未完成/JSON 暂时无效时暂用最后完整快照并等待下次检查，文件删除则清空缓存。此缓存不更改任何设置 key 或 profile 路径选择。
+
+同一个 settings JSON 也承载兼容层显示/输入协议。`android_screen_rotation_mode` 是当前旋转模式字段，取值为 `user_landscape`（默认，跟随系统，只在横屏间旋转，受系统自动旋转开关约束）、`auto`（强制双向横屏旋转，通过重力监听器绕过系统旋转锁定限制）、`landscape`（不旋转）、`reverse_landscape`（固定 180°）或 `portrait`（锁定竖屏，需自行安装并启用兼容的竖屏 UI MOD，默认不启用）；旧 `android_flip_screen_180` 仍会同步，供旧兼容包 fallback，portrait 下为 false。启动器不内置或自动启用竖屏 MOD，offline bootstrap 不包含 full compat 的竖屏画布协调。
+
+根窗口的 `ContentScaleMode` / `ContentScaleAspect` / `ContentScaleSize` 只能由兼容层的 `DisplaySettingsPatches` 协调，逻辑 owner 优先级是 `PortraitCompat > FixedAspect > UiScaleAuto`，Mode 始终为 `CanvasItems`。显式 `portrait` 模式使用 `Expand` 和 1080 宽、跟随 native 竖屏比例的逻辑画布，固定横屏比例和 UI scale 暂时不控制 Size，但其保存值不变，离开竖屏后恢复原 owner。Auto 比例使用 `UiScalePatches` 提供的 UI scale target，固定比例使用对应 fixed target；owner 必须在任何 Window setter 前发布，setter 必须 compare-before-set。`UiScalePatches` 中的窗口变化补丁只能请求 single-flight deferred 重算，不得直接写 `ContentScale*`。`fullscreen_render_size` 不得接管逻辑 ContentScale，也不再由 Java 转换成 `--resolution`；游戏内写入后由 compat 立即应用到根 renderer RT。实现顺序必须是先完成高层 `ContentScale*` setter，再只调用 `RenderingServer.ViewportSetRenderDirectToScreen(false)`、`ViewportSetSize()` 与 `ViewportSetGlobalCanvasTransform()`。不得修改 scene Window/输入变换/Android Surface，也不得调用 `SurfaceHolder.setFixedSize()` 或 `ViewportAttachToScreen()`。`0x0` 恢复 native RT 尺寸与高层 ContentScale 生成的原始 canvas transform；非零预设按当前 native attachment 宽高比以 Expand 语义覆盖请求矩形，例如 `2400x1080` + `1280x720` 得到 `1600x720`。自定义目标长边上限为 `max(4096, native 长边)`。根 Window `SizeChanged`、application resume 和一致性 repair 后必须重投 renderer override，防止高层 setter 复位动态目标。`global_scale` 始终独立作为 `ContentScaleFactor` 应用，`ui_font_scale_percent` 也独立；原版游戏内 UI scale 选择保存在 `user://ui_scale.cfg`，FixedAspect/PortraitCompat 期间不控制 Size，回到 Auto 横屏后恢复。runtime 显示设置只在 `NotificationApplicationResumed` 时合并为一次 deferred apply，不得在 window/application focus 通知中同步重建 viewport。
+
+修改设置 key 时必须同步：
+
+- Java repository / UI；
+- `port-mod/STS2AndroidPortCompat/Android/AndroidSettingsBridge.cs`；
+- 相关 `Patches/*Settings*.cs`；
+- `.agent/agent-docs/changelog/`（agent-only，不提交）。
+
+## 7. compat pack target 维护
+
+`port-mod` 默认在 `main` 上维护 flat matrix。普通共用修复不要再按游戏版本开开发分支；版本差异放到 `targets/active/<target_id>/target.json`、target adapter/capability 或少量条件编译。历史 `compat/*` 分支只用于 legacy schema 1 包对照、回退诊断或已经冻结的旧维护线。
+
+当前 active targets：
+
+| 游戏版本 | target id | 原版引用配置 | ReferenceFlavor |
+| --- | --- | --- | --- |
+| `v0.103.2` / `v0.103.3` | `v0.103.x` | `.env`: `STS2_ORIGINAL_V103_REFERENCE_DIR` 或 `STS2_ORIGINAL_V103_ROOT` | `original` |
+| `v0.106.1` beta（旧测试） | `v0.106.1-beta` | `.env`: `STS2_ORIGINAL_V1061_REFERENCE_DIR` 或 `STS2_ORIGINAL_V1061_ROOT` | `original-v0.106.1` |
+| `v0.107.0` beta（旧测试） | `v0.107.0-beta` | `.env`: `STS2_ORIGINAL_V1070_REFERENCE_DIR` 或 `STS2_ORIGINAL_V1070_ROOT` | `original-v0.107.0` |
+| `v0.107.1` stable | `v0.107.1` | `.env`: `STS2_ORIGINAL_V1071_REFERENCE_DIR` 或 `STS2_ORIGINAL_V1071_ROOT` | `original-v0.107.1` |
+| `v0.108.0` stable | `v0.108.0` | `.env`: `STS2_ORIGINAL_V1080_REFERENCE_DIR` 或 `STS2_ORIGINAL_V1080_ROOT` | `original-v0.108.0` |
+| `v0.109.0` / `v0.109.1` beta（旧测试） | `v0.109.0`（稳定 id，显示 v0.109.x） | `.env`: `STS2_ORIGINAL_V1090_REFERENCE_DIR` 或 `STS2_ORIGINAL_V1090_ROOT`（历史名，指向最新 v0.109.1） | `original-v0.109.0` |
+| `v0.110.0` / `v0.110.1` public beta（旧测试） | `v0.110.0`（显示 v0.110.x） | `.env`: `STS2_ORIGINAL_V1100_REFERENCE_DIR` 或 `STS2_ORIGINAL_V1100_ROOT`（指向 v0.110.1） | `original-v0.110.0` |
+| `v0.111.0` public beta | `v0.111.0` | `.env`: `STS2_ORIGINAL_V1110_REFERENCE_DIR` 或 `STS2_ORIGINAL_V1110_ROOT` | `original-v0.111.0` |
+
+开发步骤建议：
+
+```bash
+# 1. 确认 submodule 在 main 上
+git -C port-mod status --short --branch
+
+# 2. 编译 matrix original gates（引用目录从 .env 解析）
+(cd port-mod && ./tools/build-compat-matrix.sh)
+
+# 3. 可选：构建当前 fallback 或 legacy schema 1 诊断包
+REFERENCE_FLAVOR=original-v0.111.0 tools/android/build-port-mod.sh
+# 或
+tools/android/build-port-mod.sh
+# 或
+(cd port-mod && ./tools/build-compat-pack.sh)
+
+# 4. 构建内置包/导入版 APK
+tools/android/stage-bundled-compat-packs.sh
+tools/package/build_importer_apk.sh
+```
+
+只调试当前 target 时可运行 `(cd port-mod && ./tools/build-compat-matrix.sh --target v0.111.0)`；共享 v0.109.x 的稳定 target id `v0.109.0` 仍同时覆盖 v0.109.0/v0.109.1，历史 `original-v0.109.0` flavor 应指向最新 v0.109.1 引用；稳定 target id `v0.110.0` 同时覆盖 v0.110.0/v0.110.1，历史 `original-v0.110.0` flavor 应指向 v0.110.1 引用。legacy schema 1 诊断包仍用 `REFERENCE_FLAVOR=original` / `original-v0.106.1` / `original-v0.107.0` 指定对应原版 gate，单独调试 `v0.107.1` / `v0.108.0` / `v0.109.x` / `v0.110.x` / `v0.111.0` 可分别使用对应 `original-v*` flavor。
+
+v0.110.0 是游戏 MOD API 更新，不只是 Android target 更新；v0.110.1 仅包含不触达 Android compat 的 AutoSlay/lobby 实现修复，继续共用 v0.110.x target。该 API 线移除了 `Scare`、`OutbreakPower`、旧 `LobbyPlayer`、`JoinFlow.MockInfo`、`MegaInput.accept/releaseCard` 与旧 controller/keyboard mapping API。v0.111.0 再次使用独立 target：原版新增 transport-level `HandshakeManager`，`NetClientGameService` / `NetHostGameService` 构造时必须传入 `PeerVersionInfo`，版本、ModelDb hash 与 MOD 校验在消息总线启用前完成；Android LAN 只传入 `PeerVersionInfo.LocalDefault()` 并继续使用原版握手与 wire protocol。`AnimState` 同时把 trigger branch 字段改名并增加条件 next-state graph，compat 动画预热会读取两种字段形状。直接静态引用这些变化成员的普通 MOD 必须发布匹配 v0.111.0 的版本；full compat 不会向 `sts2.dll` 伪造已删除成员。
+
+## 8. 新增游戏版本 checklist
+
+新增一个目标游戏版本时，至少需要：
+
+1. 准备对应 PC 原版/解包目录或 DLL 引用目录，并在 `.env.example` / 文档中增加对应 `STS2_ORIGINAL_*_REFERENCE_DIR` 说明。
+2. 为新版本定义 `ReferenceFlavor` 到 `CompatReferenceDir` 的解析方式（脚本映射或显式环境变量），不要提交指向个人 workspace 的 symlink。
+3. 在 `port-mod/targets/active/<target_id>/target.json` 新增 target 描述，包含 `target_id`、`versions`、`reference_flavor`、`source`、可选 `sts2_dll_sha256` 与 compile constants；同一 API-compatible variant 支持多个原版 DLL 时，`sts2_dll_sha256` 可写去重后的字符串数组。
+4. 若源码需要版本差异，优先新增 target adapter/capability；只有无法避免时才使用少量条件编译。
+5. 用对应 `ReferenceFlavor` 做 compile gate，并运行 `port-mod/tools/build-compat-matrix.sh` 覆盖所有 active target。
+6. 运行 `tools/android/stage-bundled-compat-packs.sh`。
+7. 更新 `AGENTS.md`、`doc/architecture/project-structure.md`、本文件，并在 `.agent/agent-docs/changelog/` 写 agent changelog。
+8. 构建 `tools/package/build_importer_apk.sh` 并做至少一次导入/启动 smoke test。
+9. 只有需要 legacy schema 1 对照包时，才额外新建 `compat/vX.Y.Z` 分支、新增/更新 `compat_manifest.*.json`，并更新 `tools/android/bundled-compat-packs.json`。
+
+## 9. patch 开发注意事项
+
+- 优先使用 prefix/postfix 和反射兜底，谨慎使用复杂 transpiler；Android 上 MonoMod/Cecil/Godot StringName 生命周期问题更容易暴露。
+- 任何直接引用游戏内部类型的 patch 都可能随游戏版本变化失效，应通过 active target compile gate 验证；只在单版本复现的问题优先收敛到 target adapter/capability 或条件编译，不要默认拆回 compat 分支。
+- `ModEntry.Apply()` patch 顺序很重要：BaseLib/RitsuLib 与平台/路径类 patch 必须早于 ModLoader。
+- Android temp 目录必须尽早配置，否则 Harmony/MonoMod 可能尝试使用不可写 `/tmp`。
+- Shader/resource overlay 资源应放入 `port-mod/overlay/`，重新打包 `port_compat.pck` 后才能生效。
+- 普通 MOD loader 的目标是尽量复用游戏原本的 scanner、dependency sort 和 TryLoadMod，减少与 PC 行为分叉。
+- 移动联机表情按钮只补齐 Android 入口，不复制反应协议：`MobileReactionButtonPatches` 复用 payload 的 `NReactionWheel` 私有 marker/wedge 状态和 `NReactionContainer.DoLocalReaction`，触摸选择逻辑保持参考实现的中心 deadzone 与八方向分区。`show_mobile_emoji_button` 必须从 Android companion settings 读取，以便 launcher、游戏内设置和 DevTools 修改后生效；Android 运行时判断同时接受 `OS.HasFeature("mobile")` 和 `OS.GetName()=="Android"`，避免导入 PC PCK 时 feature tag 缺失导致节点已安装却一直隐藏。按钮在 `NReactionContainer.InitializeNetworking()` / `DeinitializeNetworking()` 后立即刷新，并以原生 `Timer.timeout` 信号低频覆盖已建立的多人同步、多人大厅（可见远程玩家容器）以及角色/奖励/战斗等待面板。兼容程序集使用普通 `Microsoft.NET.Sdk`，没有游戏程序集 `Godot.NET.Sdk` 生成的虚回调分发胶水；动态按钮的按下必须显式连接 `Control.gui_input`，拖动/释放必须由原版 `NGame._Input` Harmony postfix 转交，不能只覆盖兼容类 `_GuiInput` / `_Input` / `_Process`。触摸事件使用 viewport 坐标，因此按钮中心必须通过 `GetGlobalTransformWithCanvas()` 计算，轮盘位置必须把 viewport 目标中心逆变换到父 CanvasItem 后修正；禁止把触摸位置直接与 canvas `GlobalPosition` 混算。发送时也不得把 viewport 中心直接传给 `NReactionContainer.DoLocalReaction`：先用 reaction container 的完整 CanvasItem 变换逆变换为 control-space 位置，原版本地 `NReaction` 动画和 `ReactionSynchronizer` 的 normalized position 才会使用同一可见点。wedge 的 `_defaultPosition` 是 `_Ready()` 时缓存值，可能在响应式父尺寸稳定前失效；移动入口必须在首次显示时捕获八个 wedge 当前中性位置、父尺寸和 anchor，按当前轮盘尺寸重算并写回每项 `_defaultPosition`，显示/隐藏时终止旧 tween 并立即复位，避免依次选择八项后全部落到右下旧基准；不得删除原版 25px 径向选中强调。状态日志必须包含 platform feature、设置值、network ready、scene 和按钮坐标；交互日志必须区分 press、wheel show、实际/请求中心、alignment error、wedge reset、release/react、dispatch 的 texture/viewport/control position 和失败。不要新增 Android 自有 reaction message 类型或固定网络消息 ID。
+- LAN 兼容层只适配 Android transport/UI/settings/player/save；`MessageTypes` 消息发现与排序、`NetMessageBus` 序列化/反序列化必须继续由匹配版本的原版程序集负责。不要维护 Android 固定消息表，也不要仅按内置类型重建排序，否则会同时破坏未修改 PC 联机和普通 MOD 自定义 `INetMessage`。
+- `max_multiplayer_players > 4` 是实验性 host/lobby 容量，不代表原版所有玩法 UI 已支持任意人数。`ExtendedMultiplayerRoomPatches` 只补齐已确认的确定性四槽故障：宝箱按同步器遗物数量动态创建 holder、保护默认焦点并分散手势，休息点在原版按玩家索引前创建角色容器；不得在该补丁中重写宝箱生成、投票/奖励归属、休息点选项或网络消息。修改后运行 `port-mod/tools/test-extended-multiplayer-rooms.sh` 和完整 active target matrix。
+- 所有 active target 保持同一套 Android/Mono MOD 初始化不变式：加载 MOD 前仅准备原版 shadow，占位不写入 canonical `ModelDb._contentById`，不提前计算任何 MOD 模型 ID。`Get<T>()`、`Get(Type)`、`GetById<T>` / `GetByIdOrNull<T>` 及类别 getter 的按键读取均可访问 shadow；canonical 真实内容优先，原版 ID、泛型上下文、转换及错误语义不变。不得逐个 patch 共享 native 方法体的闭合泛型方法；字典 prefix 按 canonical 实例过滤，phase 1 发布同一对象后移除。
+  每个 MOD initializer 的 `Contains(Type)` shield 只隐藏非原版类型命中早期原版 shadow 的情况；同一类型的真实重复不隐藏。`AbstractModel.InitId()` 仅在 `ModelIdSerializationCache.Init()` 前跳过早调用，之后由 `ModelDb.InitIds()` 正常初始化，不提前分配 net ID。全部 MOD patch 生效后，phase 1 发布 shadow 并按最终 ID 注册 MOD 占位，phase 2 原地构造。v0.109.x 起的 `ModelDb.Init(Type[]? injectedModelTypes = null)` 仍对 null 使用 two-phase，显式注入集合保留原版路径。回归入口为 `port-mod/tools/test-modeldb-shadow-placeholder.sh`。
+- `DeferredModPatchQueue` 按目标延迟 UI/Godot、带静态初始化器的模型，以及 `AssetSets` 等静态初始化会间接读取模型或消费池的类型；辅助方法、迭代器、静态字段与构造器调用纳入判断。ID 计算、类型发现和安全注册 patch 仍立即应用，不能提前冻结池或放宽原版 `AddModelToPool` 的迟到注册检查。读取模型的 `HarmonyTargetMethods` / `HarmonyTargetMethod` 工厂在执行前整体排队，初始化后原样重放，保留逐目标 prepare/cleanup。合成回归覆盖资源 eager cctor、前后池注册、冻结边界、失败隔离与重复 flush；真实 Loadout 工厂的既有 smoke 覆盖 1205 个目标。
+
+## 10. MOD 兼容性排查规范
+
+排查普通 MOD 在 Android 上无法加载、依赖缺失、初始化顺序异常或行为与 PC 不一致时，建议按以下方式收集参照信息：
+
+开发机不启动游戏时的分层验证、命令、真实 Loadout 工厂 smoke 和验证边界见[开发机离线 MOD 验证流程](offline-mod-validation.md)。该流程区分仓库维护的回归脚本与 ignored 的本地探针，不代表所有 MOD 都可用同一通用 runner 验证。
+
+- 可以把常用前置/依赖 MOD 仓库 clone 到工作区外或 `.agent/reference-repos/` 等不提交的位置，并 checkout 到与目标游戏版本、目标 MOD 版本匹配的 tag/branch/commit 后对照排查；不要把这些第三方源码或构建产物提交到本仓库。
+- 优先参考对应版本 PC 原版/解包代码，尤其是 `ModManager`、依赖排序、manifest 解析、assembly resolve、资源加载和初始化回调的时序；重点确认 Android 兼容层是否漏掉某一步、提前/延后某一步，或改变了原版加载顺序导致 MOD 兼容问题。
+- 对没有公开源码的 MOD，可以通过反编译其程序集获取可参考信息，用于定位入口类、manifest、依赖声明、Harmony patch、资源路径和初始化假设；反编译结果只作为本地诊断依据，不要提交第三方反编译源码或违反其许可条款。
+- 常见前置/依赖仓库：
+  - RitsuLib: <https://github.com/BAKAOLC/STS2-RitsuLib>
+  - BaseLib-StS2: <https://github.com/Alchyr/BaseLib-StS2>
+
+## 11. 兼容包 manifest 约定
+
+schema 1 legacy 单目标 manifest：
+
+```json
+{
+  "schema": 1,
+  "pack_id": "sts2-android-compat-v0.107.0-beta",
+  "display_name": "STS2 Android Compatibility beta for v0.107.0",
+  "compat_version": "0.3.2-beta.1070",
+  "channel": "beta",
+  "target_game": {
+    "version": "v0.107.0",
+    "supported_versions": ["v0.107.0"],
+    "source": "original_pc_reference_v0.107.0",
+    "sts2_dll_sha256": "...",
+    "match": "exact-preferred"
+  },
+  "runtime": {
+    "entry_assembly": "STS2Mobile.dll",
+    "entry_type": "STS2Mobile.ModEntry",
+    "entry_method": "Apply"
+  },
+  "resources": {
+    "overlay_pck": "port_compat.pck"
+  },
+  "notes": []
+}
+```
+
+schema 2 family manifest：
+
+```json
+{
+  "schema": 2,
+  "pack_id": "sts2-android-compat",
+  "display_name": "STS2 Android Compatibility",
+  "compat_version": "0.6.0-dev",
+  "channel": "mixed",
+  "targets": [
+    {
+      "target_id": "v0.111.0",
+      "versions": ["v0.111.0"],
+      "source": "original_pc_reference_v0.111.0",
+      "steam_branch": "public-beta",
+      "sts2_dll_sha256": "0861bfa1df347538d932f22d580e75420f08082792eb914e53b4882764acdbe9",
+      "artifacts": {
+        "dll": "variants/v0.111.0/STS2Mobile.dll",
+        "overlay_pck": "variants/v0.111.0/port_compat.pck"
+      }
+    }
+  ]
+}
+```
+
+`CompatPackManager` 对 schema 1 优先用 `target_game.version` 与 payload manifest 的 `version` 精确匹配；对 schema 2 会把 `targets[]` 展开成可选 variant，并优先按 payload 的 `sts2_dll_sha256` 精确匹配，再回落到 `version` / `versions` 列表。`sts2_dll_sha256` 兼容旧的单字符串和多 SHA 数组，数组任一元素命中都按精确 SHA 评分；版本页显示全部短 SHA，ADB 状态同时输出 legacy 主 SHA 与 `target_sts2_dll_sha256s`。启动配置保存 `compat_pack_id`；schema 2 还保存 `compat_target_id`，因此一个 family 包可以覆盖多个 API-compatible 游戏版本，也可以在停止维护旧 target 后把它拆成独立 legacy 包。
+
+## 12. 用户 MOD 测试建议
+
+1. 先确认无普通 MOD 时游戏可启动。
+2. 安装 BaseLib/RitsuLib 等基础库 MOD，查看 log 中 BaseLib/RitsuLib compatibility patch 是否正常。
+3. 安装目标普通 MOD 到当前 launch profile 的 MOD 目录（全局 `<files>/mods/` 或隔离 `<files>/instances/<profile_id>/mods/`）。
+4. 在附加设置中开启 MOD 总开关并确认单 MOD 未禁用。
+5. 启动后查看日志：
+   - `[Mods] Android mod initialization loaded ...`
+   - dependency sort / TryLoadMod 相关日志；
+   - 是否出现 assembly resolve 失败。
+6. 若某 MOD 只支持特定游戏版本，优先在版本页切到匹配 payload 和 compat pack；需要同一本体多套 MOD/存档时，在版本页为同一个 game body 新建多个隔离 launch profile。
