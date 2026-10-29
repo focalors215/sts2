@@ -67,7 +67,7 @@ public final class GameVersionManagerPage {
 	public View build() {
 		launchProfileManager.bootstrapIfNeeded();
 		FrameLayout frame = new FrameLayout(context);
-		frame.setBackgroundColor(ExtraSettingsUi.COLOR_BACKGROUND);
+		frame.setBackgroundColor(ExtraSettingsUi.COLOR_PAGE_BACKGROUND);
 
 		ScrollView scrollView = new ScrollView(context);
 		LinearLayout root = ExtraSettingsUi.vertical(context);
@@ -75,7 +75,7 @@ public final class GameVersionManagerPage {
 		SystemBarInsetsHelper.applySystemBarPadding(root, true, false, false, false);
 		ExtraSettingsUi.addResponsiveScrollContent(context, scrollView, root);
 
-		root.addView(ExtraSettingsUi.title(context, R.string.tab_versions));
+		root.addView(CottageTheme.pageTitle(context, context.getString(R.string.cottage_nav_versions), context.getString(R.string.cottage_tagline_versions)));
 
 		PayloadManager.Status payloadStatus = payloadManager.getStatus();
 		List<LaunchProfileManager.GamePayload> payloads = launchProfileManager.listPayloads();
@@ -146,7 +146,7 @@ public final class GameVersionManagerPage {
 		));
 		button.setStrokeColor(ColorStateList.valueOf(ExtraSettingsUi.COLOR_OUTLINE));
 		button.setStrokeWidth(ExtraSettingsUi.dp(context, 1));
-		button.setRippleColor(ColorStateList.valueOf(Color.argb(72, 201, 238, 211)));
+		button.setRippleColor(ColorStateList.valueOf(CottageTheme.RIPPLE));
 		return button;
 	}
 
@@ -757,7 +757,7 @@ public final class GameVersionManagerPage {
 		button.setBackgroundTintList(ColorStateList.valueOf(backgroundColor));
 		button.setStrokeColor(ColorStateList.valueOf(strokeColor));
 		button.setStrokeWidth(strokeColor == Color.TRANSPARENT ? 0 : ExtraSettingsUi.dp(context, 1));
-		button.setRippleColor(ColorStateList.valueOf(Color.argb(72, 201, 238, 211)));
+		button.setRippleColor(ColorStateList.valueOf(CottageTheme.RIPPLE));
 		button.setShapeAppearanceModel(ShapeAppearanceModel.builder().setAllCornerSizes(ExtraSettingsUi.dp(context, 18)).build());
 		button.setPadding(ExtraSettingsUi.dp(context, 12), ExtraSettingsUi.dp(context, 10), ExtraSettingsUi.dp(context, 12), ExtraSettingsUi.dp(context, 10));
 		button.setMinHeight(ExtraSettingsUi.dp(context, 42));

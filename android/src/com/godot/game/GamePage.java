@@ -2,14 +2,10 @@ package com.godot.game;
 
 import android.content.Context;
 import android.content.res.ColorStateList;
-import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.LinearGradient;
 import android.graphics.Paint;
-import android.graphics.Path;
 import android.graphics.RectF;
-import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
@@ -39,19 +35,20 @@ import org.json.JSONObject;
 import java.util.List;
 
 public final class GamePage {
-	private static final int COLOR_BACKGROUND = Color.rgb(17, 20, 17);
-	private static final int COLOR_SURFACE = Color.rgb(30, 35, 31);
-	private static final int COLOR_SURFACE_CONTAINER = Color.rgb(40, 47, 42);
-	private static final int COLOR_SURFACE_CONTAINER_HIGH = Color.rgb(50, 58, 52);
-	private static final int COLOR_PRIMARY = Color.rgb(129, 217, 154);
-	private static final int COLOR_ON_PRIMARY = Color.rgb(0, 57, 26);
-	private static final int COLOR_PRIMARY_CONTAINER = Color.rgb(0, 82, 40);
-	private static final int COLOR_ON_PRIMARY_CONTAINER = Color.rgb(156, 246, 180);
-	private static final int COLOR_SECONDARY_CONTAINER = Color.rgb(51, 75, 59);
-	private static final int COLOR_ON_SECONDARY_CONTAINER = Color.rgb(207, 233, 214);
-	private static final int COLOR_ON_SURFACE = Color.rgb(225, 227, 223);
-	private static final int COLOR_ON_SURFACE_VARIANT = Color.rgb(193, 201, 193);
-	private static final int COLOR_RIPPLE = Color.argb(76, 129, 217, 154);
+	// 主题：喵喵零和小鱼的小屋（配色见 CottageTheme）；页面叠在模糊插画上，不铺底色。
+	private static final int COLOR_BACKGROUND = Color.TRANSPARENT;
+	private static final int COLOR_SURFACE = CottageTheme.CARD;
+	private static final int COLOR_SURFACE_CONTAINER = 0xEB24304F;
+	private static final int COLOR_SURFACE_CONTAINER_HIGH = CottageTheme.SECONDARY;
+	private static final int COLOR_PRIMARY = CottageTheme.CAT;
+	private static final int COLOR_ON_PRIMARY = CottageTheme.NAVY;
+	private static final int COLOR_PRIMARY_CONTAINER = CottageTheme.SECONDARY;
+	private static final int COLOR_ON_PRIMARY_CONTAINER = CottageTheme.INK;
+	private static final int COLOR_SECONDARY_CONTAINER = CottageTheme.CARD_HIGH;
+	private static final int COLOR_ON_SECONDARY_CONTAINER = CottageTheme.INK;
+	private static final int COLOR_ON_SURFACE = CottageTheme.INK;
+	private static final int COLOR_ON_SURFACE_VARIANT = CottageTheme.INK_SOFT;
+	private static final int COLOR_RIPPLE = CottageTheme.RIPPLE;
 	private static final PathInterpolator EMPHASIZED = new PathInterpolator(0.2f, 0f, 0f, 1f);
 
 	private final Context context;
@@ -149,15 +146,19 @@ public final class GamePage {
 	private View buildTopAppBar() {
 		LinearLayout bar = ExtraSettingsUi.horizontal(context);
 		bar.setGravity(Gravity.CENTER_VERTICAL);
-		bar.setPadding(dp(20), dp(24), dp(20), dp(16));
+		bar.setPadding(dp(20), dp(16), dp(20), dp(12));
 		SystemBarInsetsHelper.applySystemBarPadding(bar, true, false, false, false);
 
-		TextView title = text(context.getString(R.string.game_home_title), 28, COLOR_ON_SURFACE, Typeface.BOLD);
-		title.setLetterSpacing(0.018f);
-		title.setSingleLine(true);
-		title.setEllipsize(TextUtils.TruncateAt.END);
+		// 宽屏侧栏已经有插画 logo，这里用描边标题；窄屏主页顶部放插画 logo。
+		LinearLayout titleHolder = ExtraSettingsUi.horizontal(context);
+		if (ExtraSettingsUi.isWideLayout(context)) {
+			titleHolder.addView(CottageTheme.pageTitle(context, context.getString(R.string.cottage_nav_dashboard), context.getString(R.string.cottage_tagline_dashboard)));
+		} else {
+			ImageView brand = CottageTheme.artCard(context, CottageTheme.BRAND_RECT, context.getString(R.string.cottage_theme_name));
+			titleHolder.addView(brand, new LinearLayout.LayoutParams(dp(210), ViewGroup.LayoutParams.WRAP_CONTENT));
+		}
 		LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-		bar.addView(title, titleParams);
+		bar.addView(titleHolder, titleParams);
 		bar.addView(buildSteamChip());
 		return bar;
 	}
@@ -207,79 +208,58 @@ public final class GamePage {
 	}
 
 	private View buildHeroCard(DashboardState state) {
-		FrameLayout card = state.payloadReady ? new AnimatedHeroCard(context) : new FrameLayout(context);
-		if (!state.payloadReady) {
-			card.setBackground(emptyHeroBackground());
-			card.setClipToOutline(true);
-		}
+		LinearLayout card = ExtraSettingsUi.vertical(context);
+		card.setBackground(CottageTheme.cardBackground(context));
+		card.setPadding(dp(18), dp(18), dp(18), dp(20));
 
-		LinearLayout content = ExtraSettingsUi.vertical(context);
-		content.setPadding(dp(24), dp(24), dp(24), dp(24));
-		card.addView(content, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+		// 同 iPad 主页插画：喵喵零和小鱼盖着毯子看书。
+		ImageView postcard = CottageTheme.artCard(context, CottageTheme.POSTCARD_RECT, context.getString(R.string.cottage_postcard_description));
+		card.addView(postcard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-		TextView version = text(
-			state.payloadReady ? context.getString(R.string.game_hero_ready_title_format, state.payloadStatus.shortVersionLabel()) : context.getString(R.string.game_hero_missing_title),
-			18,
-			state.payloadReady ? COLOR_ON_PRIMARY_CONTAINER : COLOR_ON_SURFACE,
-			Typeface.BOLD
-		);
-		version.setSingleLine(true);
-		version.setEllipsize(TextUtils.TruncateAt.END);
-		content.addView(version);
+		LinearLayout nameRow = ExtraSettingsUi.horizontal(context);
+		nameRow.setGravity(Gravity.CENTER_VERTICAL);
+		LinearLayout names = ExtraSettingsUi.vertical(context);
+		TextView name = text(context.getString(R.string.cottage_theme_name), 22, CottageTheme.CAT, Typeface.BOLD);
+		names.addView(name);
+		names.addView(text(context.getString(R.string.cottage_hero_subtitle), 14, COLOR_ON_SURFACE, Typeface.NORMAL), matchWrapParams(6));
+		nameRow.addView(names, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+		LinearLayout.LayoutParams mascotParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+		mascotParams.setMarginStart(dp(8));
+		nameRow.addView(CottageTheme.mascotRow(context, 44), mascotParams);
+		card.addView(nameRow, matchWrapParams(16));
 
 		LinearLayout sub = ExtraSettingsUi.horizontal(context);
 		sub.setGravity(Gravity.CENTER_VERTICAL);
-		ImageView subIcon = icon(state.payloadReady ? "check_circle" : "error", state.payloadReady ? Color.argb(179, 255, 255, 255) : COLOR_ON_SURFACE_VARIANT, 16);
-		sub.addView(subIcon);
+		sub.addView(icon(state.payloadReady ? "check_circle" : "error", state.payloadReady ? CottageTheme.FISH : CottageTheme.CAT, 16));
 		String subText = state.payloadReady
-			? Formatter.formatFileSize(context, state.payloadStatus.totalBytes) + " · " + state.renderer
+			? context.getString(R.string.game_hero_ready_title_format, state.payloadStatus.shortVersionLabel()) + " · " + Formatter.formatFileSize(context, state.payloadStatus.totalBytes) + " · " + state.renderer
 			: context.getString(R.string.game_hero_missing_subtitle);
-		TextView subLabel = text(subText, 13, state.payloadReady ? Color.argb(179, 255, 255, 255) : COLOR_ON_SURFACE_VARIANT, Typeface.NORMAL);
-		subLabel.setSingleLine(true);
+		TextView subLabel = text(subText, 13, state.payloadReady ? CottageTheme.FISH : CottageTheme.CAT, Typeface.NORMAL);
+		subLabel.setMaxLines(2);
 		subLabel.setEllipsize(TextUtils.TruncateAt.END);
 		LinearLayout.LayoutParams subTextParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
 		subTextParams.setMarginStart(dp(6));
 		sub.addView(subLabel, subTextParams);
-		content.addView(sub, matchWrapParams(6));
+		card.addView(sub, matchWrapParams(12));
 
 		MaterialButton launchButton = launchButton(state.payloadReady);
 		LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56));
-		buttonParams.topMargin = dp(24);
-		content.addView(launchButton, buttonParams);
+		buttonParams.topMargin = dp(18);
+		card.addView(launchButton, buttonParams);
 		return card;
 	}
 
 	private MaterialButton launchButton(boolean ready) {
-		MaterialButton button = new MaterialButton(context);
-		button.setAllCaps(false);
-		button.setText(ready ? R.string.launch_game : R.string.game_launch_disabled);
-		button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-		button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+		MaterialButton button = CottageTheme.primaryButton(context, context.getString(ready ? R.string.cottage_start_game : R.string.game_launch_disabled));
 		button.setGravity(Gravity.CENTER);
-		button.setMinWidth(0);
-		button.setMinHeight(0);
-		button.setMinimumHeight(0);
-		button.setInsetTop(0);
-		button.setInsetBottom(0);
-		button.setPadding(dp(16), 0, dp(16), 0);
-		MaterialSymbols.applyButtonIcon(button, ready ? "play_arrow" : "block", ColorStateList.valueOf(ready ? COLOR_ON_PRIMARY : Color.argb(77, 255, 255, 255)), 24);
-		button.setIconPadding(dp(8));
-		button.setIconGravity(MaterialButton.ICON_GRAVITY_TEXT_START);
-		button.setShapeAppearanceModel(ShapeAppearanceModel.builder().setAllCornerSizes(dp(28)).build());
+		button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
 		if (ready) {
-			button.setTextColor(COLOR_ON_PRIMARY);
-			MaterialSymbols.applyButtonIcon(button, "play_arrow", ColorStateList.valueOf(COLOR_ON_PRIMARY), 24);
-			button.setBackgroundTintList(ColorStateList.valueOf(COLOR_PRIMARY));
-			button.setRippleColor(ColorStateList.valueOf(Color.argb(96, 255, 255, 255)));
 			button.setOnTouchListener(new PressScaleTouchListener(0.97f, 100));
 			button.setOnClickListener(v -> actions.launchGame());
 		} else {
-			int disabledColor = Color.argb(20, 255, 255, 255);
-			int disabledContent = Color.argb(77, 255, 255, 255);
-			button.setTextColor(disabledContent);
-			MaterialSymbols.applyButtonIcon(button, "block", ColorStateList.valueOf(disabledContent), 24);
-			button.setBackgroundTintList(ColorStateList.valueOf(disabledColor));
-			button.setRippleColor(ColorStateList.valueOf(Color.argb(36, 255, 255, 255)));
+			button.setBackgroundTintList(ColorStateList.valueOf(Color.argb(40, 255, 242, 216)));
+			button.setTextColor(Color.argb(150, 255, 241, 214));
+			button.setIcon(new CottageTheme.PawDrawable(Color.argb(120, 255, 199, 107)));
 			button.setOnClickListener(v -> actions.showMessage(context.getString(R.string.game_launch_disabled_message)));
 		}
 		return button;
@@ -328,7 +308,7 @@ public final class GamePage {
 		LinearLayout header = ExtraSettingsUi.horizontal(context);
 		header.setGravity(Gravity.CENTER_VERTICAL);
 		header.addView(statusIconBadge(iconGlyph));
-		TextView title = text(context.getString(titleRes), 13, COLOR_ON_SURFACE_VARIANT, Typeface.NORMAL);
+		TextView title = text(context.getString(titleRes), 13, COLOR_ON_SURFACE_VARIANT, Typeface.BOLD);
 		title.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
 		LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
 		titleParams.setMarginStart(dp(8));
@@ -346,7 +326,7 @@ public final class GamePage {
 
 	private View statusIconBadge(String iconGlyph) {
 		FrameLayout badge = new FrameLayout(context);
-		badge.setBackground(roundedFill(Color.argb(31, 129, 217, 154), 100));
+		badge.setBackground(roundedFill(Color.argb(40, 255, 199, 107), 100));
 		ImageView icon = icon(iconGlyph, COLOR_PRIMARY, 16);
 		badge.addView(icon, new FrameLayout.LayoutParams(dp(16), dp(16), Gravity.CENTER));
 		badge.setLayoutParams(new LinearLayout.LayoutParams(dp(28), dp(28)));
@@ -354,7 +334,7 @@ public final class GamePage {
 	}
 
 	private TextView sectionTitle(int stringRes) {
-		return text(context.getString(stringRes), 16, COLOR_ON_SURFACE, Typeface.BOLD);
+		return CottageTheme.sectionHeading(context, context.getString(stringRes));
 	}
 
 	private View buildActionRow(ActionSpec[] specs, int columns) {
@@ -452,12 +432,6 @@ public final class GamePage {
 		return drawable;
 	}
 
-	private GradientDrawable emptyHeroBackground() {
-		GradientDrawable drawable = roundedFill(COLOR_SURFACE_CONTAINER, 24);
-		drawable.setStroke(dp(2), Color.argb(26, 255, 255, 255), dp(8), dp(6));
-		return drawable;
-	}
-
 	private RippleDrawable rippleForeground(float radiusDp) {
 		GradientDrawable mask = roundedFill(Color.WHITE, radiusDp);
 		return new RippleDrawable(ColorStateList.valueOf(COLOR_RIPPLE), null, mask);
@@ -520,101 +494,6 @@ public final class GamePage {
 		}
 	}
 
-	private static final class AnimatedHeroCard extends FrameLayout {
-		private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-		private final Paint orbPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-		private final RectF rect = new RectF();
-		private final Path clipPath = new Path();
-		private final int radius;
-		private long startMs;
-		private boolean attached;
-		private final Runnable ticker = new Runnable() {
-			@Override
-			public void run() {
-				if (!attached) {
-					return;
-				}
-				invalidate();
-				postOnAnimation(this);
-			}
-		};
-
-		AnimatedHeroCard(Context context) {
-			super(context);
-			setWillNotDraw(false);
-			setLayerType(View.LAYER_TYPE_SOFTWARE, null);
-			radius = ExtraSettingsUi.dp(context, 24);
-		}
-
-		@Override
-		protected void onAttachedToWindow() {
-			super.onAttachedToWindow();
-			attached = true;
-			startMs = SystemClock.uptimeMillis();
-			postOnAnimation(ticker);
-		}
-
-		@Override
-		protected void onDetachedFromWindow() {
-			attached = false;
-			removeCallbacks(ticker);
-			super.onDetachedFromWindow();
-		}
-
-		@Override
-		protected void onDraw(Canvas canvas) {
-			super.onDraw(canvas);
-			float width = getWidth();
-			float height = getHeight();
-			if (width <= 0 || height <= 0) {
-				return;
-			}
-			long elapsed = SystemClock.uptimeMillis() - startMs;
-			float gradientCycle = (elapsed % 8000L) / 8000f;
-			float flow = (float)(0.5f - 0.5f * Math.cos(Math.PI * 2f * gradientCycle));
-			rect.set(0, 0, width, height);
-			clipPath.reset();
-			clipPath.addRoundRect(rect, radius, radius, Path.Direction.CW);
-			canvas.save();
-			canvas.clipPath(clipPath);
-
-			float offset = (flow - 0.5f) * width * 1.4f;
-			LinearGradient gradient = new LinearGradient(
-				-offset,
-				0,
-				width * 1.35f - offset,
-				height,
-				new int[] { COLOR_PRIMARY_CONTAINER, COLOR_SECONDARY_CONTAINER, Color.rgb(0, 109, 54) },
-				new float[] { 0f, 0.5f, 1f },
-				Shader.TileMode.CLAMP
-			);
-			paint.setShader(gradient);
-			canvas.drawRoundRect(rect, radius, radius, paint);
-			paint.setShader(null);
-
-			drawOrb(canvas, width, height, elapsed, true);
-			drawOrb(canvas, width, height, elapsed, false);
-			canvas.restore();
-		}
-
-		private void drawOrb(Canvas canvas, float width, float height, long elapsed, boolean top) {
-			long duration = top ? 12000L : 16000L;
-			float cycle = (elapsed % duration) / (float)duration;
-			float eased = (float)(0.5f - 0.5f * Math.cos(Math.PI * 2f * cycle));
-			if (!top) {
-				eased = 1f - eased;
-			}
-			float baseRadius = ExtraSettingsUi.dp(getContext(), top ? 80 : 60);
-			float radius = baseRadius * (1f + 0.1f * eased);
-			float centerX = top ? width + ExtraSettingsUi.dp(getContext(), 60) - ExtraSettingsUi.dp(getContext(), 20) * eased : ExtraSettingsUi.dp(getContext(), 40) - ExtraSettingsUi.dp(getContext(), 20) * eased;
-			float centerY = top ? ExtraSettingsUi.dp(getContext(), 40) + ExtraSettingsUi.dp(getContext(), 20) * eased : height + ExtraSettingsUi.dp(getContext(), 20) + ExtraSettingsUi.dp(getContext(), 20) * eased;
-			orbPaint.setColor(top ? Color.argb(38, 129, 217, 154) : Color.argb(26, 156, 246, 180));
-			orbPaint.setMaskFilter(new BlurMaskFilter(ExtraSettingsUi.dp(getContext(), top ? 60 : 50), BlurMaskFilter.Blur.NORMAL));
-			canvas.drawCircle(centerX, centerY, radius, orbPaint);
-			orbPaint.setMaskFilter(null);
-		}
-	}
-
 	private static final class StatusCardView extends FrameLayout {
 		private final GradientDrawable backgroundDrawable;
 		private ImageView watermark;
@@ -624,7 +503,8 @@ public final class GamePage {
 			backgroundDrawable = new GradientDrawable();
 			backgroundDrawable.setShape(GradientDrawable.RECTANGLE);
 			backgroundDrawable.setColor(COLOR_SURFACE_CONTAINER);
-			backgroundDrawable.setCornerRadius(ExtraSettingsUi.dp(context, 16));
+			backgroundDrawable.setCornerRadius(ExtraSettingsUi.dp(context, 20));
+			backgroundDrawable.setStroke(ExtraSettingsUi.dp(context, 1.5f), CottageTheme.OUTLINE);
 			setBackground(backgroundDrawable);
 			setClipToOutline(true);
 			setOnTouchListener((view, event) -> {
@@ -721,7 +601,7 @@ public final class GamePage {
 
 		private void applyBackground(boolean pressed) {
 			backgroundDrawable.setColor(pressed ? COLOR_SURFACE_CONTAINER : COLOR_SURFACE);
-			backgroundDrawable.setStroke(ExtraSettingsUi.dp(getContext(), 1), highlight ? COLOR_PRIMARY : Color.argb(13, 255, 255, 255));
+			backgroundDrawable.setStroke(ExtraSettingsUi.dp(getContext(), highlight ? 1.5f : 1f), highlight ? COLOR_PRIMARY : CottageTheme.OUTLINE);
 		}
 
 		@Override
@@ -738,7 +618,7 @@ public final class GamePage {
 			}
 			pulsePaint.setStyle(Paint.Style.STROKE);
 			pulsePaint.setStrokeWidth(stroke);
-			pulsePaint.setColor(Color.argb(alpha, 129, 217, 154));
+			pulsePaint.setColor(Color.argb(alpha, 255, 199, 107));
 			float inset = stroke / 2f;
 			pulseRect.set(inset, inset, getWidth() - inset, getHeight() - inset);
 			float radius = ExtraSettingsUi.dp(getContext(), 16);

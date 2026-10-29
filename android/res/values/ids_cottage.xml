@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Wide-layout sidebar entry for the game dashboard (the home tab shows the illustrated cottage). -->
+    <item name="nav_dashboard" type="id" />
+</resources>

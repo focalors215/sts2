@@ -65,7 +65,7 @@ public final class WelcomeSetupPage {
 
 	public View build() {
 		LinearLayout shell = ExtraSettingsUi.vertical(context);
-		shell.setBackgroundColor(ExtraSettingsUi.COLOR_BACKGROUND);
+		shell.setBackgroundColor(ExtraSettingsUi.COLOR_PAGE_BACKGROUND);
 
 		contentFrame = new FrameLayout(context);
 		shell.addView(contentFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
@@ -132,7 +132,7 @@ public final class WelcomeSetupPage {
 	private ScrollView scrollForStep() {
 		ScrollView scrollView = new ScrollView(context);
 		scrollView.setFillViewport(false);
-		scrollView.setBackgroundColor(ExtraSettingsUi.COLOR_BACKGROUND);
+		scrollView.setBackgroundColor(ExtraSettingsUi.COLOR_PAGE_BACKGROUND);
 		LinearLayout root = ExtraSettingsUi.vertical(context);
 		root.setPadding(0, ExtraSettingsUi.dp(context, 28), 0, ExtraSettingsUi.dp(context, 28));
 		SystemBarInsetsHelper.applySystemBarPadding(root, true, false, false, false);

@@ -1,24 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- 主题：喵喵零和小鱼的小屋（夜间小屋配色，与 CottageTheme 保持一致）。 -->
     <style name="Theme.Sts2ExtraSettings" parent="Theme.Material3.Dark.NoActionBar">
-        <item name="colorPrimary">#A6D3B7</item>
-        <item name="colorOnPrimary">#00381E</item>
-        <item name="colorPrimaryContainer">#1F4F31</item>
-        <item name="colorOnPrimaryContainer">#C9EED3</item>
-        <item name="colorSecondary">#C4CCBD</item>
-        <item name="colorOnSecondary">#2A3429</item>
-        <item name="colorSecondaryContainer">#353A47</item>
-        <item name="colorOnSecondaryContainer">#E0E6D8</item>
-        <item name="colorSurface">#191D26</item>
-        <item name="colorSurfaceVariant">#2A2F3D</item>
-        <item name="colorOnSurface">#F1F4FA</item>
-        <item name="colorOnSurfaceVariant">#C2C7D3</item>
-        <item name="colorOutline">#666D7D</item>
+        <item name="colorPrimary">#FFC76B</item>
+        <item name="colorOnPrimary">#1B2540</item>
+        <item name="colorPrimaryContainer">#2C3A63</item>
+        <item name="colorOnPrimaryContainer">#FFF1D6</item>
+        <item name="colorSecondary">#7FB7FF</item>
+        <item name="colorOnSecondary">#1B2540</item>
+        <item name="colorSecondaryContainer">#24304F</item>
+        <item name="colorOnSecondaryContainer">#FFF1D6</item>
+        <item name="colorSurface">#1B2540</item>
+        <item name="colorSurfaceContainerHigh">#1B2540</item>
+        <item name="colorSurfaceContainerHighest">#24304F</item>
+        <item name="colorSurfaceVariant">#2C3A63</item>
+        <item name="colorOnSurface">#FFF1D6</item>
+        <item name="colorOnSurfaceVariant">#B9C2DA</item>
+        <item name="colorOutline">#3A476B</item>
         <item name="colorError">#FFB4AB</item>
         <item name="colorOnError">#690005</item>
-        <item name="android:statusBarColor">#0F1117</item>
-        <item name="android:navigationBarColor">#191D26</item>
-        <item name="android:windowBackground">#0F1117</item>
+        <item name="android:statusBarColor">#121A33</item>
+        <item name="android:navigationBarColor">#121A33</item>
+        <item name="android:windowBackground">#121A33</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
 

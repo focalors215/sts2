@@ -101,6 +101,10 @@ public final class SettingsPage {
 		lastSelectedSegment = SettingsSegment.SAVE;
 	}
 
+	public static void selectSystemSegment() {
+		lastSelectedSegment = SettingsSegment.SYSTEM;
+	}
+
 	private final Context context;
 	private final ExtraSettingsRepository repository;
 	private final ExtraSettingsActions actions;
@@ -115,12 +119,12 @@ public final class SettingsPage {
 
 	public View build() {
 		LinearLayout shell = ExtraSettingsUi.vertical(context);
-		shell.setBackgroundColor(ExtraSettingsUi.COLOR_BACKGROUND);
+		shell.setBackgroundColor(ExtraSettingsUi.COLOR_PAGE_BACKGROUND);
 		int padding = ExtraSettingsUi.pageHorizontalPadding(context);
 		shell.setPadding(padding, ExtraSettingsUi.dp(context, 18), padding, 0);
 		SystemBarInsetsHelper.applySystemBarPadding(shell, true, false, false, false);
 		LinearLayout header = ExtraSettingsUi.vertical(context);
-		header.addView(ExtraSettingsUi.title(context, R.string.tab_settings));
+		header.addView(CottageTheme.pageTitle(context, context.getString(R.string.cottage_nav_settings), context.getString(R.string.cottage_tagline_settings)));
 
 		LinearLayout tabContent = ExtraSettingsUi.vertical(context);
 		View tabs = buildSettingsSegmentedTabs(tabContent);
@@ -131,7 +135,7 @@ public final class SettingsPage {
 
 		ScrollView scrollView = new ScrollView(context);
 		scrollView.setFillViewport(false);
-		scrollView.setBackgroundColor(ExtraSettingsUi.COLOR_BACKGROUND);
+		scrollView.setBackgroundColor(ExtraSettingsUi.COLOR_PAGE_BACKGROUND);
 		tabContent.setPadding(0, ExtraSettingsUi.dp(context, 8), 0, ExtraSettingsUi.dp(context, 32));
 		if (ExtraSettingsUi.isWideLayout(context)) {
 			ExtraSettingsUi.addResponsiveScrollContent(context, scrollView, tabContent);
@@ -373,7 +377,7 @@ public final class SettingsPage {
 		card.setChecked(selected);
 		card.setStrokeWidth(ExtraSettingsUi.dp(context, selected ? 2 : 1));
 		card.setStrokeColor(selected ? ExtraSettingsUi.COLOR_PRIMARY : ExtraSettingsUi.COLOR_SURFACE_VARIANT);
-		card.setCardBackgroundColor(selected ? Color.rgb(30, 50, 39) : ExtraSettingsUi.COLOR_SURFACE_VARIANT);
+		card.setCardBackgroundColor(selected ? CottageTheme.SELECTED_CARD : ExtraSettingsUi.COLOR_SURFACE_VARIANT);
 		updateMiniPresetChildren(card, selected);
 	}
 
@@ -875,7 +879,7 @@ public final class SettingsPage {
 		row.setMinimumHeight(ExtraSettingsUi.dp(context, TextUtils.isEmpty(option.subtitle) ? 56 : 72));
 		row.setPadding(ExtraSettingsUi.dp(context, 12), ExtraSettingsUi.dp(context, 10), ExtraSettingsUi.dp(context, 12), ExtraSettingsUi.dp(context, 10));
 		GradientDrawable background = new GradientDrawable();
-		background.setColor(selected ? Color.argb(28, 166, 211, 183) : Color.TRANSPARENT);
+		background.setColor(selected ? Color.argb(28, 255, 199, 107) : Color.TRANSPARENT);
 		background.setCornerRadius(ExtraSettingsUi.dp(context, 12));
 		row.setBackground(background);
 		ExtraSettingsUi.applyRipple(row);

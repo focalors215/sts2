@@ -34,13 +34,13 @@ public final class AboutPage {
 	public View build() {
 		ScrollView scrollView = new ScrollView(context);
 		scrollView.setFillViewport(false);
-		scrollView.setBackgroundColor(ExtraSettingsUi.COLOR_BACKGROUND);
+		scrollView.setBackgroundColor(ExtraSettingsUi.COLOR_PAGE_BACKGROUND);
 		LinearLayout root = ExtraSettingsUi.vertical(context);
 		root.setPadding(0, ExtraSettingsUi.dp(context, 24), 0, ExtraSettingsUi.dp(context, 32));
 		SystemBarInsetsHelper.applySystemBarPadding(root, true, false, false, false);
 		ExtraSettingsUi.addResponsiveScrollContent(context, scrollView, root);
 
-		root.addView(ExtraSettingsUi.title(context, R.string.tab_about));
+		root.addView(CottageTheme.pageTitle(context, context.getString(R.string.cottage_nav_about), context.getString(R.string.cottage_tagline_about)));
 
 		addResponsiveCards(root, authorCard(), linkCard(R.drawable.ic_desktop_windows_24, R.string.steam_link_title, R.string.steam_link_desc, STEAM_URL));
 		addResponsiveCards(root, linkCard(R.drawable.ic_download_24, R.string.download_link_title, R.string.download_link_desc, GAME_DOWNLOAD_URL), linkCard(R.drawable.ic_error_outline_24, R.string.issue_feedback_title, R.string.issue_feedback_desc, LAUNCHER_NEW_ISSUE_URL));
