@@ -133,6 +133,11 @@ android {
             abiFilters export_abi_list
         }
 
+        // Central online-room frp server; set STS2_FRP_* in .env (kept out of git).
+        buildConfigField "String", "FRP_SERVER", "\"${System.getenv('STS2_FRP_SERVER') ?: ''}\""
+        buildConfigField "int", "FRP_SERVER_PORT", (System.getenv('STS2_FRP_SERVER_PORT') ?: '7000')
+        buildConfigField "String", "FRP_TOKEN", "\"${(System.getenv('STS2_FRP_TOKEN') ?: '').replace('\\', '\\\\').replace('"', '\\"')}\""
+
         // Feel free to modify the application id to your own.
         applicationId getExportPackageName()
         versionCode getExportVersionCode()
@@ -285,6 +290,7 @@ android {
             res.srcDirs = ['res']
             aidl.srcDirs = ['aidl']
             assets.srcDirs = ['assets']
+            jniLibs.srcDirs = ['libs/frp']
         }
         test.java.srcDirs = ['test']
         debug.jniLibs.srcDirs = ['libs/debug', 'libs/debug/vulkan_validation_layers']

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="cottage_nav_network">Online Cottage</string>
+    <string name="cottage_tab_network">Online</string>
+    <string name="cottage_tagline_network">Play together with friends anywhere</string>
+    <string name="online_default_nickname">Player</string>
+    <string name="online_nickname_title">Nickname</string>
+    <string name="online_nickname_desc">Your room shows up as “Nickname’s room”.</string>
+    <string name="online_nickname_save">Save</string>
+    <string name="online_nickname_saved">Nickname saved.</string>
+    <string name="online_create_title">Create a room</string>
+    <string name="online_create_desc">The game opens straight into character select, and friends will see your room here.</string>
+    <string name="online_create_continuing">You have an unfinished multiplayer save; creating a room continues that run.</string>
+    <string name="online_create_button">Create room</string>
+    <string name="online_rooms_title">Online rooms</string>
+    <string name="online_refresh">Refresh</string>
+    <string name="online_scanning">Looking for rooms…</string>
+    <string name="online_no_rooms">No rooms online right now. Create one!</string>
+    <string name="online_join">Join</string>
+    <string name="online_version_differs">Different version</string>
+    <string name="online_room_version_format">Game %1$s</string>
+    <string name="online_room_continuing_suffix"> · continuing a saved run</string>
+    <string name="online_room_version_mismatch_format"> · yours is %1$s</string>
+    <string name="online_room_name_format">%1$s’s room</string>
+    <string name="online_unnamed_room">Unnamed room</string>
+    <string name="online_creating_title">Creating room…</string>
+    <string name="online_creating_message">Connecting to the online server</string>
+    <string name="online_create_failed">Could not create the room</string>
+    <string name="online_not_configured">The online server is not configured in this build (STS2_FRP_SERVER in .env).</string>
+    <string name="online_component_missing">The online component (libsts2frp.so) is missing from this build.</string>
+    <string name="online_server_full">The server has no free room slots. Try again later.</string>
+    <string name="online_card_failed">Could not start the room info service.</string>
+    <string name="online_frp_config_invalid">Invalid frp config: %1$s</string>
+    <string name="online_frp_timeout">Timed out connecting to the server</string>
+    <string name="online_hint_token">The token does not match the server.</string>
+    <string name="online_hint_port_not_allowed">The server does not allow this remote port (check frps allowPorts).</string>
+    <string name="online_hint_already">The remote port or proxy name is taken: another host may be using it, or the last connection has not been released yet (retry in about a minute).</string>
+    <string name="online_hint_port_unavailable">The remote port is already in use on the server.</string>
+    <string name="online_hint_refused">Cannot reach the frp server: check the address, port and the server firewall / security group.</string>
+    <string name="online_hint_eof">The connection was closed by the server or network: check that the port is the frps port and is not blocked by a proxy.</string>
+    <string name="online_hint_timeout">Timed out connecting to the frp server: check the network and the server firewall / security group.</string>
+</resources>

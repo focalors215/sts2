@@ -381,14 +381,25 @@ tools/package/build_importer_apk.sh
 流程：
 
 1. 同步 runtime。
-2. 构建当前 compat fallback。
-3. 构建/刷新全部内置 compat pack zip 到 gitignored 的 `android/assets/compat_packs/`。
+2. 用 Go + NDK 构建联机小屋的 frp 客户端 `android/libs/frp/arm64-v8a/libsts2frp.so`（见下方「联机小屋 frp 客户端」）。
+3. 构建当前 compat fallback。
+4. 构建/刷新全部内置 compat pack zip 到 gitignored 的 `android/assets/compat_packs/`。
 4. 执行 `local.properties` 中的 `android.gradle.task`（默认 `assembleMonoRelease`）。
 5. 复制 APK 到 `android.importer.dist`（默认 `dist/sts2-re-importer.apk`）。
 
 正式 APK 默认声明 `android:appCategory="game"` / `android:isGame="true"`，让 OEM 游戏/GPU 调度识别 `GodotApp`。设置页“系统”分区预加载下方及游戏内 Android 设置提供三挡刷新率：默认高刷、请求 60Hz、跟随系统，对应 `android_display_refresh_rate_mode=high/60hz/system`。旧高刷开关 true/false 迁移为 high/system；新字段优先，迁移后移除旧字段。60Hz 只接受当前尺寸下的近似 60Hz（含 59.94Hz）目标，设备不暴露目标时撤销旧请求并交回系统，不保证 OEM 采纳，也不改变游戏 FPS 上限或 VSync。`HighRefreshRateController` 只在 resumed + focused + render Surface 有效时应用，失焦、pause、destroy 或 Surface 销毁时取消延迟任务，以 100/500/1500ms 有限重试等待 Surface。Android 12+ 使用 `CHANGE_FRAME_RATE_ALWAYS`，同一 Surface 未变的请求不重复投票，三挡切换允许更新/撤销 vote；精确 mode 使用 `preferredDisplayModeId`，alternative-only 清空 mode ID 并使用 `preferredRefreshRate`，随后有界验证实际 mode/Hz。不使用 `SurfaceControl` 或改 Surface 尺寸。设置页同一分区保留默认关闭的“Show performance overlay”开关；开启后下次启动加载 `godot-debug-menu`，显示 FPS、帧时间、CPU/GPU frame graph 和渲染器/硬件信息。
 
 Java 不再把 `fullscreen_render_size` 转换为 Godot `--resolution`。根窗口始终使用 `CanvasItems`：Auto 比例取 UI scale target，固定比例取对应 fixed target，`global_scale` 独立作为 `ContentScaleFactor`。游戏内切换 `fullscreen_render_size` 后，compat 会先完成高层 `ContentScale*` setter，再只用 `RenderingServer.ViewportSetRenderDirectToScreen(false)`、`ViewportSetSize()` 与 `ViewportSetGlobalCanvasTransform()` 即时调整根 renderer RT；scene Window、输入变换与 Android Surface 均不改变，也不使用 `SurfaceHolder.setFixedSize()` 或 `ViewportAttachToScreen()`。`0x0` 恢复 native attachment 尺寸与原始 canvas transform；非零预设按当前 native attachment 比例以 Expand 语义覆盖请求矩形，例如 `2400x1080` 设备选择 `1280x720` 时实际 target 为 `1600x720`。自定义目标长边上限为 `max(4096, native 长边)`。根 Window `SizeChanged`、resume 与 ContentScale repair 后会重投 renderer 状态，因此动态切换前后内容相对大小与触控坐标保持不变，高刷 Surface 生命周期也不受分辨率切换影响。
+
+### 9.1 联机小屋 frp 客户端
+
+启动器「联机小屋」与 iPad 启动器共用同一套在线房间：中心 frp 服务器上 20 个槽位，槽位 i 把房主本机 UDP 33771 映射到服务器 UDP `33771+i`，并把一张 JSON 房间卡发布在服务器 TCP `34771+i`；其他玩家扫描这些 TCP 端口列出房间，直接连服务器的 UDP 端口加入。只有房主运行 frp。
+
+- `android/frp-bridge/`：官方 frp v0.71.1 客户端库的 C API（与 `sts2-ios/src/FrpBridge` 相同）加 `jni_android.c`，由 `tools/android/build-frp-bridge.sh` 以 `GOOS=android GOARCH=arm64 -buildmode=c-shared` 编成 `libsts2frp.so`，Gradle 通过 `main.jniLibs.srcDirs += libs/frp` 打包。需要 `.env` 的 `GO_BIN`（可选 `GOPATH` / `GOCACHE` 指向已缓存 frp 模块的目录）与 NDK。
+- 服务器地址、端口、令牌由 `.env` 的 `STS2_FRP_SERVER` / `STS2_FRP_SERVER_PORT` / `STS2_FRP_TOKEN` 在构建时写入 `BuildConfig`，不入库；留空则联机小屋显示“未配置”。
+- frps 需要在 `bindPort` 上对外监听（TCP），`allowPorts` 包含 UDP 33771–33790 与 TCP 34771–34790，云服务器安全组同样放行。
+- Java：`FrpBridge`（JNI）、`OnlineRoomService`（扫描、占槽、写 `frpc.toml`、等待两个 proxy 都 running）、`NetworkPage`（昵称 / 创建房间 / 在线房间列表）。创建或加入后写 `<files>/launcher/pending-action.json` 再走正常 `launchGame()`；启动器全新打开时会清掉遗留指令。
+- 兼容层：`port-mod` 的 `RemoteRoomPatches` 在 `NMainMenu._Ready`（经 `LanMultiplayerBootstrapPatches`）读取并删除该文件，`host` 走原版多人菜单 `FastHost` / 继续存档 `StartHost`（由 LAN 补丁接到 ENet 33771），`join` 调原版 `NMainMenu.JoinGame(ENetClientConnectionInitializer)`。仅 `STS2_TARGET_1110` 实现，其他 target 提示不支持。
 
 ## 10. 构建直装版 APK
 

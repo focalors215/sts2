@@ -86,6 +86,10 @@ public class GameSettingsActivity extends AppCompatActivity implements ExtraSett
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
+		if (savedInstanceState == null) {
+			// An online-room action left by an abandoned launch must not auto-host the next game.
+			OnlineRoomService.get(this).clearPendingAction();
+		}
 		ExtraSettingsUi.applyPhonePortraitTabletFreeOrientation(this);
 		SystemBarInsetsHelper.enableEdgeToEdge(this);
 		repository = new ExtraSettingsRepository(this);
@@ -203,6 +207,7 @@ public class GameSettingsActivity extends AppCompatActivity implements ExtraSett
 			addNavButton(sidebar, R.id.nav_game, R.string.cottage_nav_home, "home");
 			addNavButton(sidebar, R.id.nav_dashboard, R.string.cottage_nav_dashboard, "stadia_controller");
 			addNavButton(sidebar, R.id.nav_mods, R.string.cottage_nav_mods, "extension");
+			addNavButton(sidebar, R.id.nav_network, R.string.cottage_nav_network, "groups");
 			addNavButton(sidebar, R.id.nav_versions, R.string.cottage_nav_versions, "layers");
 			addNavButton(sidebar, R.id.nav_settings, R.string.cottage_nav_settings, "settings");
 			addNavButton(sidebar, R.id.nav_about, R.string.cottage_nav_about, "info");
@@ -224,6 +229,7 @@ public class GameSettingsActivity extends AppCompatActivity implements ExtraSett
 			tabs.setBackground(tabsBackground);
 			addTab(tabs, R.id.nav_game, R.string.cottage_tab_home);
 			addTab(tabs, R.id.nav_mods, R.string.cottage_tab_mods);
+			addTab(tabs, R.id.nav_network, R.string.cottage_tab_network);
 			addTab(tabs, R.id.nav_versions, R.string.cottage_tab_versions);
 			addTab(tabs, R.id.nav_settings, R.string.cottage_tab_settings);
 			addTab(tabs, R.id.nav_about, R.string.cottage_tab_about);
@@ -254,7 +260,7 @@ public class GameSettingsActivity extends AppCompatActivity implements ExtraSett
 
 		setContentView(root);
 		int savedTab = ExtraSettingsPreferences.getLastSelectedMainTab(this, R.id.nav_game);
-		if (savedTab != R.id.nav_game && savedTab != R.id.nav_dashboard && savedTab != R.id.nav_mods && savedTab != R.id.nav_versions && savedTab != R.id.nav_settings && savedTab != R.id.nav_about) {
+		if (savedTab != R.id.nav_game && savedTab != R.id.nav_dashboard && savedTab != R.id.nav_mods && savedTab != R.id.nav_network && savedTab != R.id.nav_versions && savedTab != R.id.nav_settings && savedTab != R.id.nav_about) {
 			savedTab = R.id.nav_game;
 		}
 		if (savedTab == R.id.nav_dashboard && !wideLayout) {
@@ -330,8 +336,7 @@ public class GameSettingsActivity extends AppCompatActivity implements ExtraSett
 		} else if (hotspot == CottageHomeStage.HOTSPOT_MODS) {
 			openModsTab();
 		} else if (hotspot == CottageHomeStage.HOTSPOT_NETWORK) {
-			SettingsPage.selectSystemSegment();
-			openSettingsTab();
+			openTab(R.id.nav_network);
 		} else {
 			openSettingsTab();
 		}
@@ -477,6 +482,8 @@ public class GameSettingsActivity extends AppCompatActivity implements ExtraSett
 		View page;
 		if (itemId == R.id.nav_mods) {
 			page = new ModsPage(this, repository, this).build();
+		} else if (itemId == R.id.nav_network) {
+			page = new NetworkPage(this, this).build();
 		} else if (itemId == R.id.nav_versions) {
 			page = new GameVersionManagerPage(this, this).build();
 		} else if (itemId == R.id.nav_settings) {
