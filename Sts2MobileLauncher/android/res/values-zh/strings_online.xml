@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="cottage_nav_network">联机小屋</string>
+    <string name="cottage_tab_network">联机</string>
+    <string name="cottage_tagline_network">和朋友一起爬塔，不在一个 Wi‑Fi 也行</string>
+    <string name="online_default_nickname">玩家</string>
+    <string name="online_nickname_title">昵称</string>
+    <string name="online_nickname_desc">房间名会显示为“昵称的房间”。</string>
+    <string name="online_nickname_save">保存</string>
+    <string name="online_nickname_saved">昵称已保存。</string>
+    <string name="online_create_title">创建房间</string>
+    <string name="online_create_desc">创建后直接进入选角色界面，朋友在这里就能看到你的房间。</string>
+    <string name="online_create_continuing">你有未完成的多人存档，创建房间将继续这一局。</string>
+    <string name="online_create_button">创建房间</string>
+    <string name="online_rooms_title">在线房间</string>
+    <string name="online_refresh">刷新</string>
+    <string name="online_scanning">正在查找房间…</string>
+    <string name="online_no_rooms">暂时没有在线房间，创建一个吧。</string>
+    <string name="online_join">加入游戏</string>
+    <string name="online_version_differs">版本不同</string>
+    <string name="online_room_version_format">游戏 %1$s</string>
+    <string name="online_room_continuing_suffix"> · 继续存档</string>
+    <string name="online_room_version_mismatch_format"> · 你的版本 %1$s</string>
+    <string name="online_room_name_format">%1$s的房间</string>
+    <string name="online_unnamed_room">未命名房间</string>
+    <string name="online_creating_title">正在创建房间…</string>
+    <string name="online_creating_message">连接联机服务器</string>
+    <string name="online_create_failed">创建房间失败</string>
+    <string name="online_not_configured">这个版本没有配置联机服务器（.env 中的 STS2_FRP_SERVER）。</string>
+    <string name="online_component_missing">这个版本缺少联机组件（libsts2frp.so）。</string>
+    <string name="online_server_full">服务器房间已满，请稍后再试。</string>
+    <string name="online_card_failed">无法启动房间信息服务。</string>
+    <string name="online_frp_config_invalid">frp 配置无效：%1$s</string>
+    <string name="online_frp_timeout">连接服务器超时</string>
+    <string name="online_hint_token">令牌（token）与服务器不一致。</string>
+    <string name="online_hint_port_not_allowed">服务器不允许该远程端口（检查 frps 的 allowPorts）。</string>
+    <string name="online_hint_already">远程端口或映射名已被占用：可能有其他房主在用，或上次连接未释放（约 1 分钟后重试）。</string>
+    <string name="online_hint_port_unavailable">服务器上该远程端口已被占用。</string>
+    <string name="online_hint_refused">连不上 frp 服务器：检查地址、端口，以及服务器防火墙/安全组。</string>
+    <string name="online_hint_eof">连接被服务器或网络中断：检查端口是否为 frps 端口、是否被代理软件拦截。</string>
+    <string name="online_hint_timeout">连接 frp 服务器超时：检查网络和服务器防火墙/安全组。</string>
+</resources>

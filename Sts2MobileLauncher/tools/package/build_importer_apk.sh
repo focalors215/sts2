@@ -14,6 +14,7 @@ RELEASE_KEYSTORE_PASSWORD_VALUE="$(sts2_config_value RELEASE_KEYSTORE_PASSWORD a
 RELEASE_KEYSTORE_ALIAS_VALUE="$(sts2_config_value RELEASE_KEYSTORE_ALIAS android.release_keystore_alias androiddebugkey)"
 
 "$ROOT/tools/android/sync-runtime-from-references.sh"
+"$ROOT/tools/android/build-frp-bridge.sh"
 "$ROOT/tools/android/build-port-mod.sh"
 "$ROOT/tools/android/stage-bundled-compat-artifacts.sh"
 
