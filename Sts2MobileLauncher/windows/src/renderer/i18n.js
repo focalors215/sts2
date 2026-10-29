@@ -46,7 +46,7 @@
 			profile_current: '当前', profile_select: '设为当前', profile_edit: '编辑', profile_open: '打开目录', profile_remove: '移除',
 			profile_version: '版本', profile_branch: '分支', profile_path: '目录', profile_dll: 'sts2.dll', profile_missing: '缺少：{files}', profile_ready: '文件完整',
 			profile_source_steam: 'Steam', profile_source_manual: '手动目录', profile_launch: '启动方式', profile_via_steam: '通过 Steam 启动', profile_via_exe: '直接运行 exe',
-			edit_title: '编辑启动配置', edit_name: '名称', edit_via_steam: '通过 Steam 启动', edit_via_steam_desc: '保留 Steam 登录、云存档和联机；关闭则直接运行 SlayTheSpire2.exe。', edit_args: '额外启动参数（仅此配置）',
+			edit_title: '编辑启动配置', edit_name: '名称', edit_via_steam: '通过 Steam 启动', edit_via_steam_desc: '默认关闭：直接运行游戏并跳过 Steam 初始化；开启后保留 Steam 登录、云存档和联机。', edit_args: '额外启动参数（仅此配置）',
 			remove_title: '移除启动配置', remove_body: '只从启动器里移除「{name}」，不会删除游戏文件。',
 			// 设置
 			seg_display: '画面', seg_controls: '操作', seg_saves: '存档', seg_system: '系统',
@@ -123,7 +123,7 @@
 			profile_current: 'Current', profile_select: 'Use this', profile_edit: 'Edit', profile_open: 'Open folder', profile_remove: 'Remove',
 			profile_version: 'Version', profile_branch: 'Branch', profile_path: 'Folder', profile_dll: 'sts2.dll', profile_missing: 'Missing: {files}', profile_ready: 'Files complete',
 			profile_source_steam: 'Steam', profile_source_manual: 'Manual folder', profile_launch: 'Launch', profile_via_steam: 'Launch via Steam', profile_via_exe: 'Run exe directly',
-			edit_title: 'Edit profile', edit_name: 'Name', edit_via_steam: 'Launch via Steam', edit_via_steam_desc: 'Keeps Steam login, cloud saves and multiplayer. Off runs SlayTheSpire2.exe directly.', edit_args: 'Extra launch arguments (this profile only)',
+			edit_title: 'Edit profile', edit_name: 'Name', edit_via_steam: 'Launch via Steam', edit_via_steam_desc: 'Off by default: run the game directly and skip Steam initialization. Turn on for Steam login, cloud saves and multiplayer.', edit_args: 'Extra launch arguments (this profile only)',
 			remove_title: 'Remove profile', remove_body: 'Only removes "{name}" from the launcher. Game files are not deleted.',
 			seg_display: 'Display', seg_controls: 'Controls', seg_saves: 'Saves', seg_system: 'System',
 			set_window: 'Window mode', set_window_desc: 'Window argument passed at launch. "Game default" uses the in-game setting.',

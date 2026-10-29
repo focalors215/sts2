@@ -253,7 +253,7 @@ function registerIpc() {
 	handle('game:launch', async () => {
 		const profile = currentProfile();
 		const info = await game.inspectGameDir(profile.gameDir);
-		if (!info.ready && !profile.launchViaSteam) {
+		if (!info.ready) {
 			throw new Error('game_not_ready');
 		}
 		const settings = config.settings;

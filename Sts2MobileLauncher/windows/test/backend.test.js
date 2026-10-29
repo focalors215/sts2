@@ -8,6 +8,7 @@ const path = require('path');
 const yazl = require('yazl');
 const { parseVdf, getKey } = require('../src/main/vdf');
 const game = require('../src/main/game');
+const { LauncherConfig } = require('../src/main/config');
 const mods = require('../src/main/mods');
 const saves = require('../src/main/saves');
 const { safeEntryName } = require('../src/main/ziputil');
@@ -45,7 +46,20 @@ test('builds launch arguments like the Android log level bridge', () => {
 	assert.strictEqual(args.filter(a => a === '-log').length, 5);
 	assert.ok(args.includes('VeryDebug'));
 	assert.deepStrictEqual(args.slice(-3), ['--foo', 'a b', '--bar']);
-	assert.deepStrictEqual(game.buildLaunchArgs({ windowMode: 'default', renderer: 'default', logLevel: 'off', extraArgs: '' }, null), []);
+	assert.deepStrictEqual(game.buildLaunchArgs({ windowMode: 'default', renderer: 'default', logLevel: 'off', extraArgs: '' }, null), ['--force-steam', 'off']);
+	assert.deepStrictEqual(game.buildLaunchArgs({ windowMode: 'default', renderer: 'default', logLevel: 'off', extraArgs: '' }, { launchViaSteam: true }), []);
+});
+
+test('defaults to direct launch and migrates legacy Steam profiles once', () => {
+	const fresh = new LauncherConfig(tempDir());
+	assert.strictEqual(fresh.addProfile({ gameDir: tempDir(), source: 'steam' }).launchViaSteam, false);
+	const dir = tempDir();
+	writeJson(path.join(dir, 'launcher.json'), { version: 1, profiles: [{ id: 'old', gameDir: 'C:/games/sts2', source: 'steam', launchViaSteam: true }] });
+	const config = new LauncherConfig(dir);
+	assert.strictEqual(config.selectedProfile().launchViaSteam, false);
+	config.save();
+	config.updateProfile('old', { launchViaSteam: true });
+	assert.strictEqual(new LauncherConfig(dir).selectedProfile().launchViaSteam, true);
 });
 
 test('inspects a game directory', async () => {

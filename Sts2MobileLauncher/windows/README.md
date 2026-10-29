@@ -42,6 +42,7 @@ tools/package/build_windows_launcher.sh
 
 - 在 Linux 上输出便携版 `dist/windows/sts2-cottage-launcher-<version>-win-x64.zip`（解压后运行 `STS2 Cottage Launcher.exe`）。
 - 安装包（NSIS `.exe`）需要在 Windows 上构建（或装有 Wine）：`npm run dist`；也可以手动运行 GitHub Actions 的 **Windows launcher** 工作流，从产物下载 zip 与安装包。
+- 自动检测 Steam 库只用于定位已安装的游戏文件。新启动配置默认直接运行 `SlayTheSpire2.exe --force-steam off`，不需要登录 Steam；旧版保存的 Steam 启动配置首次升级时会切换为直接启动。若需要 Steam 云存档或原版联机，可在启动配置中手动开启「通过 Steam 启动」。本启动器不会修改游戏文件或 Steam 账号。
 - 插画、图标与 Material Symbols 字体只在仓库保留一份（`android/res/`、`doc/images/`），`npm run prepare-assets` 会复制到 ignored 的 `windows/assets/generated/`。
 
 当前未做代码签名，首次运行时 Windows SmartScreen 可能提示未知发布者。

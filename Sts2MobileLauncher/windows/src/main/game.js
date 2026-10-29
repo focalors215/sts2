@@ -167,6 +167,9 @@ function buildLaunchArgs(settings, profile) {
 			args.push('-log', type, level);
 		}
 	}
+	if (!profile || !profile.launchViaSteam) {
+		args.push('--force-steam', 'off');
+	}
 	args.push(...splitArgs(settings.extraArgs), ...splitArgs(profile && profile.extraArgs));
 	return args;
 }
@@ -186,8 +189,8 @@ function splitArgs(text) {
 }
 
 /**
- * 启动游戏。Steam 安装默认经 steam://run 启动（保留 Steam 登录、云存档与联机）；
- * 手动目录或关闭该选项时直接运行 exe。
+ * 启动游戏。默认直接运行 exe 并关闭游戏内 Steam 平台初始化；
+ * 用户主动选择 Steam 启动时通过 steam://run 保留平台功能。
  */
 function launchGame(profile, settings, openExternal) {
 	const args = buildLaunchArgs(settings, profile);

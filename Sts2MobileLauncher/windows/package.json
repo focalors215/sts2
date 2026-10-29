@@ -1,7 +1,7 @@
 {
   "name": "sts2-cottage-launcher",
   "productName": "STS2 Cottage Launcher",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Slay the Spire 2 Windows 启动器：喵喵零和小鱼的小屋（与 Android / iPad 启动器同一套前端）",
   "license": "MIT",
   "private": true,
