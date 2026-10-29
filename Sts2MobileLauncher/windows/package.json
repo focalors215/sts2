@@ -10,8 +10,8 @@
     "prepare-assets": "node scripts/prepare-assets.js",
     "start": "npm run prepare-assets && electron .",
     "test": "node --test test/*.test.js",
-    "dist": "npm run prepare-assets && electron-builder --win --x64",
-    "dist:zip": "npm run prepare-assets && electron-builder --win zip --x64"
+    "dist": "npm run prepare-assets && electron-builder --win --x64 --publish never",
+    "dist:zip": "npm run prepare-assets && electron-builder --win zip --x64 --publish never"
   },
   "dependencies": {
     "yauzl": "3.4.0",
@@ -55,6 +55,7 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "shortcutName": "STS2 小屋启动器"
-    }
+    },
+    "publish": null
   }
 }

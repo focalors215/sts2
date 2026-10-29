@@ -15,7 +15,7 @@ TARGETS=(zip)
 if [[ "${OS:-}" == "Windows_NT" ]] || command -v wine >/dev/null 2>&1; then
   TARGETS+=(nsis)
 fi
-npx electron-builder --win "${TARGETS[@]}" --x64
+npx electron-builder --win "${TARGETS[@]}" --x64 --publish never
 
 echo "Windows launcher written to $ROOT/dist/windows/"
 ls -1 "$ROOT/dist/windows/"*.zip "$ROOT/dist/windows/"*.exe 2>/dev/null || true
