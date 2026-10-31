@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const online = require('./online');
 
 const DEFAULT_SETTINGS = Object.freeze({
 	windowMode: 'default',      // default / fullscreen / windowed
@@ -41,6 +42,7 @@ class LauncherConfig {
 			lastTab: typeof raw.lastTab === 'string' ? raw.lastTab : 'home',
 			settings: normalizeSettings(raw.settings),
 			welcomeDone: raw.welcomeDone === true,
+			online: normalizeOnline(raw.online),
 		};
 	}
 
@@ -118,6 +120,28 @@ class LauncherConfig {
 		this.data.welcomeDone = true;
 		this.save();
 	}
+
+	get online() {
+		return this.data.online;
+	}
+
+	updateOnline(patch) {
+		this.data.online = normalizeOnline({ ...this.data.online, ...patch });
+		this.save();
+		return this.data.online;
+	}
+}
+
+/** 联机小屋：昵称、持久化联机身份（首次随机生成）、上次局域网直连地址。 */
+function normalizeOnline(raw) {
+	const source = raw && typeof raw === 'object' ? raw : {};
+	const port = Number.parseInt(source.lanPort, 10);
+	return {
+		nickname: online.normalizeNickname(source.nickname, '玩家'),
+		playerId: online.isValidPlayerId(source.playerId) ? source.playerId : online.newPlayerId(),
+		lanHost: typeof source.lanHost === 'string' ? source.lanHost.trim().slice(0, 255) : '',
+		lanPort: port > 0 && port <= 65535 ? port : online.LOCAL_GAME_PORT,
+	};
 }
 
 function normalizeProfile(raw) {

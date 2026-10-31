@@ -40,6 +40,7 @@ Android 侧拆成三层维护：
    - Electron 应用，与 Android / iPad 共用「喵喵零和小鱼的小屋」前端（插画热区、配色、描边标题、吉祥物与 Android `CottageTheme` / `CottageHomeStage` 同坐标，见 `doc/architecture/launcher-theme.md`）。
    - Windows 直接运行 PC 原版，不使用兼容包/payload store；启动配置 = 游戏目录（Steam 库自动检测或手动），MOD 在 `<游戏目录>/mods/`，开关写当前存档账号 `settings.save` 的 `mod_settings`（与 Android 同一协议），存档默认 `%APPDATA%\SlayTheSpire2`，快照放启动器 userData。
    - 插画/字体/图标只在 `android/res/`、`doc/images/` 保留一份，`windows/scripts/prepare-assets.js` 复制到 ignored 的 `windows/assets/generated/`；改主题时三端同步。
+   - 联机小屋：与 Android / iPad 同一套 frp 在线房间 + 局域网直连；游戏侧是 PC MOD `windows/online-mod`（读 `user://launcher/pending-action.json`，ENet 开房/加入），frp 客户端是 `windows/frp-helper` 编出的 `sts2-frpc.exe` 子进程，见 `windows/README.md#联机小屋`。
    - 构建：`tools/package/build_windows_launcher.sh`（Linux 出便携 zip，Windows/Wine 另出 NSIS 安装包；CI 为 `.github/workflows/windows-launcher.yml`），后端测试 `cd windows && npm test`。
 5. **通用离线启动层 / offline bootstrap**
    - `offline-bootstrap/src/STS2OfflineBootstrap` 编译输出同名 `STS2Mobile.dll`，只为复用 patched runtime 入口 ABI；`ModelDbRuntimeContract` 按 API 形状解析无参 `ModelDb.Init()` 与默认 null `Init(Type[]?)`，显式注入集合保留原版路径，未知参数/返回语义拒绝接管。

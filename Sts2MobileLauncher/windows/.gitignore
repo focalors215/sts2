@@ -1,2 +1,5 @@
 node_modules/
 assets/generated/
+resources/
+online-mod/bin/
+online-mod/obj/

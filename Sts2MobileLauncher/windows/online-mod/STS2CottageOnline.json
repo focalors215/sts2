@@ -1,0 +1,10 @@
+{
+  "id": "STS2CottageOnline",
+  "name": "小屋联机组件",
+  "author": "STS2 Cottage Launcher",
+  "description": "由小屋启动器安装：让「联机小屋」的在线房间和局域网直连走游戏自带的 ENet 联机，与 Android / iPad 互通。不改玩法。",
+  "version": "0.1.0",
+  "has_pck": false,
+  "has_dll": true,
+  "affects_gameplay": false
+}
