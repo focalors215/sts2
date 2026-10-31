@@ -21,4 +21,28 @@ for (const [from, to] of copies) {
 	}
 	fs.copyFileSync(source, path.join(out, to));
 }
+
+// 联机小屋服务器（与 Android BuildConfig.FRP_* 同源）：环境变量优先，否则读仓库根目录 .env；不入库。
+function readDotEnv(file) {
+	const values = {};
+	if (!fs.existsSync(file)) {
+		return values;
+	}
+	for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+		const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
+		if (match) {
+			values[match[1]] = match[2].replace(/^(["'])(.*)\1$/, '$2');
+		}
+	}
+	return values;
+}
+const dotEnv = readDotEnv(path.join(root, '.env'));
+const env = name => process.env[name] !== undefined ? process.env[name] : dotEnv[name] || '';
+const onlineFile = path.join(out, 'online.json');
+if (env('STS2_FRP_SERVER')) {
+	fs.writeFileSync(onlineFile, JSON.stringify({ server: env('STS2_FRP_SERVER'), serverPort: Number.parseInt(env('STS2_FRP_SERVER_PORT'), 10) || 7000, token: env('STS2_FRP_TOKEN') }));
+} else {
+	fs.rmSync(onlineFile, { force: true });
+	console.warn('STS2_FRP_SERVER not set: the online room list will show "not configured".');
+}
 console.log(`shared assets copied to ${path.relative(process.cwd(), out) || out}`);

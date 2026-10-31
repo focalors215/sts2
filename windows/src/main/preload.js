@@ -33,5 +33,13 @@ contextBridge.exposeInMainWorld('launcher', {
 	open: (target, profileId) => call('shell:open', target, profileId),
 	openExternal: url => call('shell:external', url),
 	launch: () => call('game:launch'),
+	onlineSetNickname: nickname => call('online:setNickname', nickname),
+	onlineScan: () => call('online:scan'),
+	onlineCreate: () => call('online:create'),
+	onlineJoin: (host, port) => call('online:join', host, port),
+	onlineHostLan: () => call('online:hostLan'),
+	onlineJoinLan: (host, port) => call('online:joinLan', host, port),
+	onlineStop: () => call('online:stop'),
 	onGameExited: callback => ipcRenderer.on('game-exited', () => callback()),
+	onOnlineChanged: callback => ipcRenderer.on('online-changed', () => callback()),
 });

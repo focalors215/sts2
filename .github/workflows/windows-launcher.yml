@@ -26,6 +26,15 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: windows/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: windows/frp-helper/go.mod
+          cache-dependency-path: windows/frp-helper/go.sum
+      # 联机小屋 frp 助手；联机组件 MOD 需要原版 sts2.dll 引用，CI 不构建（本地 tools/windows/build-online-mod.sh）。
+      - run: go build -trimpath -ldflags "-s -w" -o ../resources/frp/sts2-frpc.exe .
+        working-directory: windows/frp-helper
+        env:
+          CGO_ENABLED: '0'
       - run: npm ci
       - run: npm test
       - run: npm run dist

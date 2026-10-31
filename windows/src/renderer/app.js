@@ -32,6 +32,9 @@ const ui = {
 	openMods: new Set(),
 	layoutKey: '',
 	busy: false,
+	rooms: [],
+	scanning: false,
+	scanned: false,
 };
 
 // ---------- 小工具 ----------
@@ -104,7 +107,8 @@ function switchControl(checked, onChange, disabled, label) {
 
 function formatError(error) {
 	const message = error && error.message ? error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(error);
-	const known = { no_profile: 'err_no_profile', game_not_ready: 'err_game_not_ready', game_running: 'err_game_running', no_settings_save: 'err_no_settings_save', no_manifest: 'no_manifest' };
+	const known = { no_profile: 'err_no_profile', game_not_ready: 'err_game_not_ready', game_running: 'err_game_running', no_settings_save: 'err_no_settings_save', no_manifest: 'no_manifest',
+		online_not_configured: 'online_not_configured', online_component_missing: 'online_component_missing', online_no_settings: 'online_no_settings', online_bad_address: 'online_bad_address' };
 	return known[message] ? t(known[message]) : t('error', { message });
 }
 
@@ -269,6 +273,7 @@ function buildSidebar(tab) {
 		['home', 'nav_home', 'home'],
 		['dashboard', 'nav_dashboard', 'stadia_controller'],
 		['mods', 'nav_mods', 'extension'],
+		['network', 'nav_network', 'groups'],
 		['versions', 'nav_versions', 'layers'],
 		['settings', 'nav_settings', 'settings'],
 		['about', 'nav_about', 'info'],
@@ -284,7 +289,7 @@ function buildSidebar(tab) {
 }
 
 function buildTabs(tab) {
-	const items = [['home', 'tab_home'], ['mods', 'tab_mods'], ['versions', 'tab_versions'], ['settings', 'tab_settings'], ['about', 'tab_about']];
+	const items = [['home', 'tab_home'], ['mods', 'tab_mods'], ['network', 'tab_network'], ['versions', 'tab_versions'], ['settings', 'tab_settings'], ['about', 'tab_about']];
 	const tabs = h('div', { class: 'tabs', role: 'tablist' });
 	for (const [key, label] of items) {
 		tabs.append(h('button', { class: `tab${tab === key ? ' selected' : ''}`, role: 'tab', 'aria-selected': tab === key ? 'true' : 'false', onclick: () => openTab(key) }, t(label)));
@@ -296,6 +301,8 @@ function buildPage(tab, wide) {
 	const inner = h('div', { class: 'page-inner' });
 	if (tab === 'mods') {
 		buildModsPage(inner);
+	} else if (tab === 'network') {
+		buildNetworkPage(inner);
 	} else if (tab === 'versions') {
 		buildVersionsPage(inner);
 	} else if (tab === 'settings') {
@@ -378,8 +385,7 @@ function onHotspot(key) {
 	} else if (key === 'mods') {
 		openTab('mods');
 	} else if (key === 'network') {
-		ui.settingsSegment = 'system';
-		openTab('settings');
+		openTab('network');
 	} else {
 		openTab('settings');
 	}
@@ -822,8 +828,147 @@ function buildSystemSettings(inner, grid) {
 	grid.append(h('div', { class: 'setting' }, icon('inventory_2', 'lead'),
 		h('div', { class: 'grow' }, h('div', { class: 'setting-title' }, t('set_data')), h('div', { class: 'setting-desc mono' }, ui.state.dataDir)),
 		h('button', { class: 'chip', onclick: () => run(() => api.open('data')) }, icon('folder_open'), t('open'))));
-	inner.append(h('h2', { class: 'section-heading' }, t('network_title')),
-		h('div', { class: 'card compact notice' }, icon('groups'), h('span', {}, t('network_body'))));
+	inner.append(h('h2', { class: 'section-heading' }, t('nav_network')),
+		h('button', { class: 'setting clickable', onclick: () => openTab('network') }, icon('groups', 'lead'),
+			h('div', { class: 'grow' }, h('div', { class: 'setting-title' }, t('nav_network')), h('div', { class: 'setting-desc' }, t('network_settings_desc'))),
+			icon('chevron_right', 'muted')));
+}
+
+// ---------- 联机小屋 ----------
+function buildNetworkPage(inner) {
+	const net = ui.state.online;
+	inner.append(h('div', { class: 'page-header' }, pageTitle(t('nav_network'), t('tagline_network'))));
+	if (!net.componentReady) {
+		inner.append(h('div', { class: 'card compact notice warn' }, icon('warning'), h('span', {}, t('online_component_missing'))));
+		return;
+	}
+	const profile = currentProfile();
+	if (!profile) {
+		inner.append(h('div', { class: 'card compact notice' }, icon('info'), h('span', {}, t('err_no_profile'))),
+			h('div', {}, h('button', { class: 'btn secondary small', onclick: () => openTab('versions') }, icon('layers'), t('nav_versions'))));
+		return;
+	}
+	if (net.hosting.state !== 'idle') {
+		inner.append(hostingCard(net));
+	}
+	inner.append(nicknameCard(net));
+
+	inner.append(h('h2', { class: 'section-heading' }, t('online_title')));
+	if (!net.configured) {
+		inner.append(h('div', { class: 'card compact notice warn' }, icon('cloud_off'), h('span', {}, t('online_not_configured'))));
+	} else {
+		const create = h('div', { class: 'setting' }, icon('add_home', 'lead'),
+			h('div', { class: 'grow' }, h('div', { class: 'setting-title' }, t('online_create_title')),
+				h('div', { class: 'setting-desc' }, net.continuing ? t('online_create_continuing') : t('online_create_desc'))),
+			h('button', { class: 'btn primary small', disabled: net.hosting.state !== 'idle', onclick: createRoom }, icon('rocket_launch'), t('online_create_button')));
+		inner.append(create);
+		inner.append(h('div', { class: 'row wrap' }, h('h2', { class: 'section-heading grow' }, t('online_rooms_title')),
+			h('button', { class: 'btn secondary small', disabled: ui.scanning, onclick: scanRooms }, icon('refresh'), ui.scanning ? t('online_scanning') : t('refresh'))));
+		const list = h('div', { class: 'mod-list' });
+		if (ui.scanning && !ui.rooms.length) {
+			list.append(h('div', { class: 'empty' }, t('online_scanning')));
+		} else if (!ui.rooms.length) {
+			list.append(h('div', { class: 'empty' }, window.mascot.mascotRow(56), ui.scanned ? t('online_no_rooms') : t('online_scanning')));
+		}
+		for (const room of ui.rooms) {
+			list.append(roomCard(room, net));
+		}
+		inner.append(list);
+		if (!ui.scanned && !ui.scanning) {
+			scanRooms();
+		}
+	}
+
+	inner.append(h('h2', { class: 'section-heading' }, t('lan_title')));
+	const addresses = net.lanAddresses.length ? net.lanAddresses.map(a => a.address).join('  ·  ') : t('lan_no_address');
+	inner.append(h('div', { class: 'setting' }, icon('wifi', 'lead'),
+		h('div', { class: 'grow' }, h('div', { class: 'setting-title' }, t('lan_host_title')),
+			h('div', { class: 'setting-desc' }, t('lan_host_desc', { port: net.gamePort })),
+			h('div', { class: 'mono soft' }, addresses)),
+		h('button', { class: 'btn secondary small', onclick: () => launchOnline(() => api.onlineHostLan(), t('lan_hosting')) }, icon('home'), t('lan_host_button'))));
+	const hostInput = h('input', { class: 'text-input mono', value: net.lanHost, placeholder: t('lan_ip_placeholder'), 'aria-label': t('lan_ip') });
+	const portInput = h('input', { class: 'text-input mono', value: String(net.lanPort), inputmode: 'numeric', 'aria-label': t('lan_port'), style: { width: '110px' } });
+	const joinLan = () => launchOnline(() => api.onlineJoinLan(hostInput.value, portInput.value), t('online_joining'));
+	[hostInput, portInput].forEach(input => input.addEventListener('keydown', event => { if (event.key === 'Enter') joinLan(); }));
+	inner.append(h('div', { class: 'setting column' },
+		h('div', { class: 'row' }, icon('login', 'lead'), h('div', { class: 'grow' }, h('div', { class: 'setting-title' }, t('lan_join_title')), h('div', { class: 'setting-desc' }, t('lan_join_desc')))),
+		h('div', { class: 'row' }, hostInput, portInput, h('button', { class: 'btn secondary small', onclick: joinLan }, t('online_join')))));
+
+	inner.append(h('div', { class: 'card compact notice' }, icon('info'), h('span', {}, t('online_tips'))));
+}
+
+function hostingCard(net) {
+	const room = net.hosting.room;
+	const state = net.hosting.state;
+	const line = state === 'starting' ? t('online_creating') : state === 'reconnecting' ? t('online_reconnecting')
+		: t('online_hosting_line', { name: room ? room.name : '', server: net.server, port: room ? room.port : '' });
+	return h('div', { class: `card compact notice${state === 'reconnecting' ? ' warn' : ''}` }, icon(state === 'running' ? 'cell_tower' : 'sync'),
+		h('span', { class: 'grow' }, line),
+		h('button', { class: 'btn ghost small', onclick: () => run(() => api.onlineStop(), t('online_stopped')) }, t('online_stop')));
+}
+
+function nicknameCard(net) {
+	const input = h('input', { class: 'text-input', value: net.nickname, maxlength: '16', 'aria-label': t('online_nickname_title') });
+	const saveNickname = () => run(() => api.onlineSetNickname(input.value), t('online_nickname_saved'));
+	input.addEventListener('keydown', event => { if (event.key === 'Enter') saveNickname(); });
+	return h('div', { class: 'setting column' },
+		h('div', { class: 'row' }, icon('badge', 'lead'), h('div', { class: 'grow' }, h('div', { class: 'setting-title' }, t('online_nickname_title')), h('div', { class: 'setting-desc' }, t('online_nickname_desc')))),
+		h('div', { class: 'row' }, input, h('button', { class: 'btn secondary small', onclick: saveNickname }, t('save'))));
+}
+
+function roomCard(room, net) {
+	const mismatch = net.gameVersion && room.version !== 'unknown' && room.version !== net.gameVersion;
+	let meta = t('online_room_version', { version: room.version });
+	if (room.continuing) {
+		meta += t('online_room_continuing');
+	}
+	if (mismatch) {
+		meta += t('online_room_mismatch', { version: net.gameVersion });
+	}
+	return h('div', { class: `mod-card${mismatch ? ' problem' : ''}` },
+		h('div', { class: 'mod-head' }, icon(mismatch ? 'warning' : 'meeting_room', 'muted'),
+			h('div', { class: 'grow' }, h('div', { class: 'mod-name ellipsis' }, room.name || t('online_unnamed_room')), h('div', { class: 'mod-meta ellipsis' }, meta)),
+			mismatch ? h('span', { class: 'pill bad' }, t('online_version_differs')) : null,
+			h('button', { class: 'btn primary small', disabled: net.hosting.state !== 'idle', onclick: () => launchOnline(() => api.onlineJoin(room.host, room.port), t('online_joining')) }, t('online_join'))));
+}
+
+async function scanRooms() {
+	if (ui.scanning) {
+		return;
+	}
+	ui.scanning = true;
+	render();
+	try {
+		ui.rooms = await api.onlineScan();
+	} catch (error) {
+		toast(formatError(error), true);
+	} finally {
+		ui.scanning = false;
+		ui.scanned = true;
+		if (ui.tab === 'network') {
+			render();
+		}
+	}
+}
+
+async function createRoom() {
+	toast(t('online_creating'));
+	await launchOnline(() => api.onlineCreate(), t('online_created'));
+	ui.scanned = false;
+}
+
+/** 联机启动：装好联机组件、写一次性指令再启动游戏；提示被临时关掉的 MOD。 */
+async function launchOnline(task, message) {
+	await run(task, result => {
+		const notes = [message];
+		if (result && result.disabledOthers && result.disabledOthers.length) {
+			notes.push(t('online_disabled_others', { names: result.disabledOthers.join(', ') }));
+		}
+		if (result && result.enabledMods && result.enabledMods.length) {
+			notes.push(t('online_enabled_mods', { names: result.enabledMods.join(', ') }));
+		}
+		return notes.join('\n');
+	});
 }
 
 // ---------- 关于 ----------
@@ -872,6 +1017,8 @@ document.addEventListener('keydown', event => {
 		refresh();
 	}
 });
+
+api.onOnlineChanged(() => refresh());
 
 api.onGameExited(() => {
 	toast(t('game_exited'));

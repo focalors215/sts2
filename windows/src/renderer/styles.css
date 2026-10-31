@@ -445,6 +445,7 @@ button { cursor: pointer; }
 
 #toast {
 	position: fixed;
+	white-space: pre-line;
 	left: 50%;
 	bottom: 28px;
 	z-index: 200;

@@ -55,6 +55,16 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "shortcutName": "STS2 小屋启动器"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": ".",
+        "filter": [
+          "frp/**/*",
+          "online-mod/**/*"
+        ]
+      }
+    ]
   }
 }

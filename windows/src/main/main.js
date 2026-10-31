@@ -7,6 +7,7 @@ const { LauncherConfig } = require('./config');
 const game = require('./game');
 const mods = require('./mods');
 const saves = require('./saves');
+const online = require('./online');
 
 const COTTAGE_BACKGROUND = '#121A33';
 const COTTAGE_INK = '#FFF1D6';
@@ -14,6 +15,19 @@ const COTTAGE_INK = '#FFF1D6';
 let mainWindow = null;
 let config = null;
 let gameRunning = false;
+let roomHost = null;
+const profileInfoCache = new Map();
+
+/** 打包后在 resources/，开发时在 windows/resources/（tools/windows/build-*.sh 生成）。 */
+function resourceDir(...parts) {
+	return path.join(app.isPackaged ? process.resourcesPath : path.join(__dirname, '..', '..', 'resources'), ...parts);
+}
+
+const onlinePaths = {
+	helper: () => process.env.STS2_FRPC_HELPER || resourceDir('frp', 'sts2-frpc.exe'),
+	mod: () => resourceDir('online-mod', online.MOD_ID),
+	server: () => path.join(__dirname, '..', '..', 'assets', 'generated', 'online.json'),
+};
 
 function dataDir() {
 	return app.getPath('userData');
@@ -89,6 +103,7 @@ function editSettingsSave(mutator) {
 async function buildState() {
 	const profile = config.selectedProfile();
 	const profiles = await Promise.all(config.data.profiles.map(async p => ({ ...p, info: await game.inspectGameDir(p.gameDir) })));
+	profiles.forEach(p => profileInfoCache.set(p.id, p.info));
 	const saveState = saves.selectedAccount(config.settings);
 	const modState = await modsView();
 	return {
@@ -109,6 +124,25 @@ async function buildState() {
 		},
 		mods: modState && { ...modState, mods: modState.mods.map(({ directory, manifestPath, ...rest }) => rest) },
 		dataDir: dataDir(),
+		online: onlineState(profile, saveState.account),
+	};
+}
+
+function onlineState(profile, account) {
+	const serverConfig = online.loadServerConfig(onlinePaths.server());
+	const info = profile && profileInfoCache.get(profile.id);
+	return {
+		configured: !!serverConfig,
+		server: serverConfig ? serverConfig.server : '',
+		componentReady: fs.existsSync(onlinePaths.helper()) && fs.existsSync(path.join(onlinePaths.mod(), `${online.MOD_ID}.dll`)),
+		nickname: config.online.nickname,
+		lanHost: config.online.lanHost,
+		lanPort: config.online.lanPort,
+		lanAddresses: online.localIpv4Addresses(),
+		gamePort: online.LOCAL_GAME_PORT,
+		gameVersion: (info && info.version) || '',
+		continuing: online.hasMultiplayerSave(account && account.path),
+		hosting: roomHost ? { state: roomHost.state, room: roomHost.room } : { state: 'idle', room: null },
 	};
 }
 
@@ -250,49 +284,182 @@ function registerIpc() {
 		return shell.openExternal(url);
 	});
 
-	handle('game:launch', async () => {
-		const profile = currentProfile();
-		const info = await game.inspectGameDir(profile.gameDir);
-		if (!info.ready && !profile.launchViaSteam) {
-			throw new Error('game_not_ready');
+	handle('game:launch', () => launchCurrent({}));
+
+	handle('online:setNickname', nickname => config.updateOnline({ nickname }));
+	handle('online:scan', () => {
+		const serverConfig = online.loadServerConfig(onlinePaths.server());
+		if (!serverConfig) {
+			throw new Error('online_not_configured');
 		}
-		const settings = config.settings;
-		if (settings.snapshotBeforeLaunch) {
-			const { account } = saves.selectedAccount(settings);
-			if (account) {
-				try {
-					await saves.createSnapshot(dataDir(), account, 'before-launch', settings.snapshotKeep);
-				} catch (error) {
-					// 快照失败不阻止启动，界面会在下次刷新时看到快照没有增加。
+		return online.scanRooms(serverConfig.server);
+	});
+	handle('online:create', async () => {
+		const serverConfig = online.loadServerConfig(onlinePaths.server());
+		if (!serverConfig) {
+			throw new Error('online_not_configured');
+		}
+		const prepared = await prepareOnlineLaunch();
+		if (!roomHost) {
+			roomHost = new online.RoomHost({
+				helperPath: onlinePaths.helper(),
+				workDir: path.join(dataDir(), 'frp'),
+				serverConfig,
+				onStateChange: notifyOnline,
+			});
+		}
+		roomHost.serverConfig = serverConfig;
+		const { account } = saves.selectedAccount(config.settings);
+		const room = await roomHost.create({ nickname: config.online.nickname, version: prepared.version || 'unknown', continuing: online.hasMultiplayerSave(account && account.path) });
+		try {
+			return { room, ...prepared, ...(await launchOnline({ type: 'host', online: true }, true)) };
+		} catch (error) {
+			roomHost.stop();
+			throw error;
+		}
+	});
+	handle('online:join', async (host, port) => {
+		await prepareOnlineLaunch();
+		return launchOnline({ type: 'join', online: true, host: String(host), port: Number(port) }, false);
+	});
+	handle('online:hostLan', async () => {
+		const prepared = await prepareOnlineLaunch();
+		return { ...prepared, ...(await launchOnline({ type: 'host', online: false }, false)) };
+	});
+	handle('online:joinLan', async (host, port) => {
+		const lanHost = String(host || '').trim().replace(/^\[(.*)\]$/, '$1');
+		const lanPort = Number.parseInt(port, 10);
+		if (!lanHost || !(lanPort > 0 && lanPort <= 65535)) {
+			throw new Error('online_bad_address');
+		}
+		config.updateOnline({ lanHost, lanPort });
+		const prepared = await prepareOnlineLaunch();
+		return { ...prepared, ...(await launchOnline({ type: 'join', online: false, host: lanHost, port: lanPort }, false)) };
+	});
+	handle('online:stop', () => {
+		if (roomHost) {
+			roomHost.stop();
+		}
+	});
+}
+
+/**
+ * 联机前的准备：装好联机组件 MOD，并在 settings.save 里启用它。MOD 总开关原本关着时，
+ * 打开总开关并把其他 MOD 设为禁用，避免它们随之加载导致双方 MOD 不一致。
+ */
+async function prepareOnlineLaunch() {
+	if (gameRunning) {
+		throw new Error('game_running');
+	}
+	const profile = currentProfile();
+	const info = await game.inspectGameDir(profile.gameDir);
+	if (!info.ready && !profile.launchViaSteam) {
+		throw new Error('game_not_ready');
+	}
+	const { account } = saves.selectedAccount(config.settings);
+	if (!account || !saves.readSettingsSave(account)) {
+		throw new Error('online_no_settings');
+	}
+	const updated = online.installOnlineMod(onlinePaths.mod(), info.modsDir);
+	const view = await modsView();
+	const disabledOthers = [];
+	editSettingsSave(json => {
+		const modSettings = mods.modSettingsOf(json);
+		if (!modSettings.mods_enabled) {
+			modSettings.mods_enabled = true;
+			for (const mod of view ? view.mods : []) {
+				if (mod.id !== online.MOD_ID && mod.enabled) {
+					mods.setDisabled(json, mod.id, true);
+					disabledOthers.push(mod.name || mod.id);
 				}
 			}
 		}
-		const result = await game.launchGame(profile, settings, url => shell.openExternal(url));
-		if (result.child) {
-			gameRunning = true;
-			result.child.once('exit', () => {
-				gameRunning = false;
-				if (mainWindow) {
-					if (mainWindow.isMinimized()) {
-						mainWindow.restore();
-					}
-					mainWindow.webContents.send('game-exited');
-				}
-			});
-		}
-		if (settings.afterLaunch === 'close') {
-			setTimeout(() => app.quit(), 800);
-		} else if (settings.afterLaunch === 'minimize' && mainWindow) {
-			mainWindow.minimize();
-		}
-		return { via: result.via, args: result.args };
+		mods.setDisabled(json, online.MOD_ID, false);
 	});
+	const gameplayMods = view ? view.mods.filter(m => m.id !== online.MOD_ID && m.enabled && !disabledOthers.includes(m.name || m.id)).map(m => m.name || m.id) : [];
+	return { version: info.version, componentUpdated: updated, disabledOthers, enabledMods: gameplayMods };
+}
+
+async function launchOnline(action, hosting) {
+	const saveRoot = saves.resolveSaveRoot(config.settings);
+	online.writePendingAction(saveRoot, { ...action, nickname: config.online.nickname, playerId: config.updateOnline({}).playerId });
+	try {
+		return await launchCurrent({ keepLauncher: hosting });
+	} catch (error) {
+		online.clearPendingAction(saveRoot);
+		throw error;
+	}
+}
+
+function notifyOnline() {
+	if (mainWindow && !mainWindow.isDestroyed()) {
+		mainWindow.webContents.send('online-changed');
+	}
+}
+
+async function launchCurrent({ keepLauncher }) {
+	const profile = currentProfile();
+	const info = await game.inspectGameDir(profile.gameDir);
+	if (!info.ready && !profile.launchViaSteam) {
+		throw new Error('game_not_ready');
+	}
+	const settings = config.settings;
+	if (settings.snapshotBeforeLaunch) {
+		const { account } = saves.selectedAccount(settings);
+		if (account) {
+			try {
+				await saves.createSnapshot(dataDir(), account, 'before-launch', settings.snapshotKeep);
+			} catch (error) {
+				// 快照失败不阻止启动，界面会在下次刷新时看到快照没有增加。
+			}
+		}
+	}
+	const result = await game.launchGame(profile, settings, url => shell.openExternal(url));
+	if (result.child) {
+		gameRunning = true;
+		result.child.once('exit', () => {
+			gameRunning = false;
+			// 房主退出游戏 = 关闭房间；没被游戏读走的指令也清掉。
+			if (roomHost) {
+				roomHost.stop();
+			}
+			try {
+				online.clearPendingAction(saves.resolveSaveRoot(config.settings));
+			} catch (error) {
+				// 忽略。
+			}
+			if (mainWindow) {
+				if (mainWindow.isMinimized()) {
+					mainWindow.restore();
+				}
+				mainWindow.webContents.send('game-exited');
+			}
+		});
+	}
+	// 当房主时启动器要保持运行（frp 隧道在启动器里），“关闭”改为最小化。
+	if (settings.afterLaunch === 'close' && !keepLauncher) {
+		setTimeout(() => app.quit(), 800);
+	} else if (settings.afterLaunch !== 'keep' && mainWindow) {
+		mainWindow.minimize();
+	}
+	return { via: result.via, args: result.args };
 }
 
 app.whenReady().then(() => {
 	config = new LauncherConfig(dataDir());
+	// 全新打开启动器时清掉上次遗留的联机指令（同 Android GameSettingsActivity）。
+	try {
+		online.clearPendingAction(saves.resolveSaveRoot(config.settings));
+	} catch (error) {
+		// 忽略。
+	}
 	registerIpc();
 	createWindow();
 });
 
 app.on('window-all-closed', () => app.quit());
+app.on('will-quit', () => {
+	if (roomHost) {
+		roomHost.stop();
+	}
+});
