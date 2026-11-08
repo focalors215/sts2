@@ -1,0 +1,63 @@
+diff --git a/SlayTheSpire2.LAN.Multiplayer.Reforged/Integrations/ModConfigBridge.cs b/SlayTheSpire2.LAN.Multiplayer.Reforged/Integrations/ModConfigBridge.cs
+index f0c4050..e06c7c8 100644
+--- a/SlayTheSpire2.LAN.Multiplayer.Reforged/Integrations/ModConfigBridge.cs
++++ b/SlayTheSpire2.LAN.Multiplayer.Reforged/Integrations/ModConfigBridge.cs
+@@ -30,6 +30,7 @@ namespace SlayTheSpire2.LAN.Multiplayer.Reforged.Integrations
+         private static bool _available;
+         private static bool _registered;
+         private static int _detectionAttempts;
++        private static bool _scheduled;
+ 
+         private static Type? _apiType;
+         private static Type? _entryType;
+@@ -45,20 +46,21 @@ namespace SlayTheSpire2.LAN.Multiplayer.Reforged.Integrations
+ 
+         private static void ScheduleNextFrame()
+         {
+-            if (_registered || _detectionAttempts >= MaxDetectionAttempts)
++            if (_registered || _scheduled || _detectionAttempts >= MaxDetectionAttempts)
+                 return;
+ 
+             if (Engine.GetMainLoop() is not SceneTree tree)
+                 return;
+ 
+-            tree.ProcessFrame -= OnNextFrame;
+             tree.ProcessFrame += OnNextFrame;
++            _scheduled = true;
+         }
+ 
+         private static void OnNextFrame()
+         {
+-            if (Engine.GetMainLoop() is SceneTree tree)
++            if (_scheduled && Engine.GetMainLoop() is SceneTree tree)
+                 tree.ProcessFrame -= OnNextFrame;
++            _scheduled = false;
+ 
+             if (_registered)
+                 return;
+diff --git a/SlayTheSpire2.LAN.Multiplayer.Reforged/Models/SettingsModel.cs b/SlayTheSpire2.LAN.Multiplayer.Reforged/Models/SettingsModel.cs
+index 2c74730..eac0137 100644
+--- a/SlayTheSpire2.LAN.Multiplayer.Reforged/Models/SettingsModel.cs
++++ b/SlayTheSpire2.LAN.Multiplayer.Reforged/Models/SettingsModel.cs
+@@ -15,7 +15,20 @@ namespace SlayTheSpire2.LAN.Multiplayer.Reforged.Models
+         [JsonPropertyName("remember_join_address")] public bool RememberJoinAddress { get; set; } = true;
+         [JsonPropertyName("connect_timeout_seconds")] public int ConnectTimeoutSeconds { get; set; } = 10;
+         [JsonPropertyName("net_id")] public ulong NetId { get; set; } = 1000u;
+-        [JsonPropertyName("player_name")] public string PlayerName { get; set; } = SteamFriends.GetPersonaName();
++        [JsonPropertyName("player_name")] public string PlayerName { get; set; } = GetDefaultPlayerName();
++
++        // 启动器以 --force-steam off 运行游戏时 Steamworks 未初始化，GetPersonaName 会抛异常。
++        private static string GetDefaultPlayerName()
++        {
++            try
++            {
++                return SteamFriends.GetPersonaName();
++            }
++            catch (Exception)
++            {
++                return string.Empty;
++            }
++        }
+ 
+         public int SchemaVersion { get; set; }
+     }

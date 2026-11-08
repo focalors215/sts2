@@ -13,6 +13,9 @@ using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Modding;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Connection;
+#if !STS2_TARGET_1071
+using MegaCrit.Sts2.Core.Multiplayer.Game;
+#endif
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
 using MegaCrit.Sts2.Core.Nodes.Screens.CustomRun;
@@ -196,7 +199,11 @@ public static class OnlineMod
         try
         {
             var capacity = Math.Max(MaxPlayers, run?.Players.Count ?? 0);
+#if STS2_TARGET_1071
+            var netService = new NetHostGameService();
+#else
             var netService = new NetHostGameService(PeerVersionInfo.LocalDefault());
+#endif
             var error = netService.StartENetHost(GamePort, capacity);
             if (error.HasValue)
             {

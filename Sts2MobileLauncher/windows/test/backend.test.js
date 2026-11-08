@@ -57,7 +57,9 @@ test('defaults to direct launch and migrates legacy Steam profiles once', () => 
 	writeJson(path.join(dir, 'launcher.json'), { version: 1, profiles: [{ id: 'old', gameDir: 'C:/games/sts2', source: 'steam', launchViaSteam: true }] });
 	const config = new LauncherConfig(dir);
 	assert.strictEqual(config.selectedProfile().launchViaSteam, false);
-	config.save();
+	const migrated = JSON.parse(fs.readFileSync(path.join(dir, 'launcher.json'), 'utf8'));
+	assert.strictEqual(migrated.version, 2);
+	assert.strictEqual(migrated.profiles[0].launchViaSteam, false);
 	config.updateProfile('old', { launchViaSteam: true });
 	assert.strictEqual(new LauncherConfig(dir).selectedProfile().launchViaSteam, true);
 });

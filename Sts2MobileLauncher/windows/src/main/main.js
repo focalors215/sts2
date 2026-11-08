@@ -25,7 +25,7 @@ function resourceDir(...parts) {
 
 const onlinePaths = {
 	helper: () => process.env.STS2_FRPC_HELPER || resourceDir('frp', 'sts2-frpc.exe'),
-	mod: () => resourceDir('online-mod', online.MOD_ID),
+	mods: () => resourceDir('online-mod'),
 	server: () => path.join(__dirname, '..', '..', 'assets', 'generated', 'online.json'),
 };
 
@@ -73,13 +73,13 @@ function currentProfile() {
 	return profile;
 }
 
-async function modsView() {
+async function modsView(accountOverride) {
 	const profile = config.selectedProfile();
 	if (!profile) {
 		return null;
 	}
 	const info = await game.inspectGameDir(profile.gameDir);
-	const { account } = saves.selectedAccount(config.settings);
+	const account = accountOverride || saves.selectedAccount(config.settings).account;
 	let settingsJson = null;
 	try {
 		settingsJson = saves.readSettingsSave(account);
@@ -90,14 +90,26 @@ async function modsView() {
 }
 
 /** 修改 settings.save 里的 MOD 设置：读 → 改 → 原子写。 */
-function editSettingsSave(mutator) {
-	const { account } = saves.selectedAccount(config.settings);
+function editSettingsSave(mutator, accountOverride) {
+	const account = accountOverride || saves.selectedAccount(config.settings).account;
 	const json = saves.readSettingsSave(account);
 	if (!json) {
 		throw new Error('no_settings_save');
 	}
 	mutator(json);
 	saves.writeSettingsSave(account, json);
+}
+
+/**
+ * 游戏实际使用的存档账号：直接运行 exe 时游戏用 default/<n>，通过 Steam 启动时用 steam/<id>。
+ * 启动器其它页面仍按“最近修改”选择账号，这里按启动方式挑，避免 MOD 启用和 lan_settings.json
+ * 写到游戏不会读的目录。
+ */
+function onlineAccount(profile) {
+	const { accounts, account } = saves.selectedAccount(config.settings);
+	const preferSteam = !!(profile && profile.launchViaSteam);
+	const preferred = accounts.find(candidate => (preferSteam ? candidate.id.startsWith('steam/') : candidate.id.startsWith('default/')));
+	return preferred || account;
 }
 
 async function buildState() {
@@ -131,16 +143,20 @@ async function buildState() {
 function onlineState(profile, account) {
 	const serverConfig = online.loadServerConfig(onlinePaths.server());
 	const info = profile && profileInfoCache.get(profile.id);
+	const version = (info && info.version) || '';
 	return {
 		configured: !!serverConfig,
 		server: serverConfig ? serverConfig.server : '',
-		componentReady: fs.existsSync(onlinePaths.helper()) && fs.existsSync(path.join(onlinePaths.mod(), `${online.MOD_ID}.dll`)),
+		modReady: online.modsReady(onlinePaths.mods()),
+		modInstalled: online.modsInstalled(info && info.modsDir),
+		helperReady: fs.existsSync(onlinePaths.helper()),
 		nickname: config.online.nickname,
 		lanHost: config.online.lanHost,
 		lanPort: config.online.lanPort,
 		lanAddresses: online.localIpv4Addresses(),
 		gamePort: online.LOCAL_GAME_PORT,
-		gameVersion: (info && info.version) || '',
+		gameVersion: version,
+		versionSupported: online.supportsVersion(version),
 		continuing: online.hasMultiplayerSave(account && account.path),
 		hosting: roomHost ? { state: roomHost.state, room: roomHost.room } : { state: 'idle', room: null },
 	};
@@ -300,6 +316,12 @@ function registerIpc() {
 			throw new Error('online_not_configured');
 		}
 		const prepared = await prepareOnlineLaunch();
+		const account = onlineAccount(currentProfile());
+		// 房主用固定端口开房，frp 隧道映射的就是它；地址留给加入方，这里不写。
+		online.writeLanSettings(account.path, {
+			host_port: online.LOCAL_GAME_PORT,
+			player_name: config.online.nickname,
+		});
 		if (!roomHost) {
 			roomHost = new online.RoomHost({
 				helperPath: onlinePaths.helper(),
@@ -309,10 +331,9 @@ function registerIpc() {
 			});
 		}
 		roomHost.serverConfig = serverConfig;
-		const { account } = saves.selectedAccount(config.settings);
-		const room = await roomHost.create({ nickname: config.online.nickname, version: prepared.version || 'unknown', continuing: online.hasMultiplayerSave(account && account.path) });
+		const room = await roomHost.create({ nickname: config.online.nickname, version: prepared.version || 'unknown', continuing: online.hasMultiplayerSave(account.path) });
 		try {
-			return { room, ...prepared, ...(await launchOnline({ type: 'host', online: true }, true)) };
+			return { room, ...prepared, ...(await launchOnline(true)) };
 		} catch (error) {
 			roomHost.stop();
 			throw error;
@@ -320,11 +341,20 @@ function registerIpc() {
 	});
 	handle('online:join', async (host, port) => {
 		await prepareOnlineLaunch();
-		return launchOnline({ type: 'join', online: true, host: String(host), port: Number(port) }, false);
+		online.writeLanSettings(onlineAccount(currentProfile()).path, {
+			ip_address: online.joinAddress(host, port),
+			host_port: Number(port),
+			player_name: config.online.nickname,
+		});
+		return launchOnline(false);
 	});
 	handle('online:hostLan', async () => {
 		const prepared = await prepareOnlineLaunch();
-		return { ...prepared, ...(await launchOnline({ type: 'host', online: false }, false)) };
+		online.writeLanSettings(onlineAccount(currentProfile()).path, {
+			host_port: online.LOCAL_GAME_PORT,
+			player_name: config.online.nickname,
+		});
+		return { ...prepared, ...(await launchOnline(false)) };
 	});
 	handle('online:joinLan', async (host, port) => {
 		const lanHost = String(host || '').trim().replace(/^\[(.*)\]$/, '$1');
@@ -334,7 +364,12 @@ function registerIpc() {
 		}
 		config.updateOnline({ lanHost, lanPort });
 		const prepared = await prepareOnlineLaunch();
-		return { ...prepared, ...(await launchOnline({ type: 'join', online: false, host: lanHost, port: lanPort }, false)) };
+		online.writeLanSettings(onlineAccount(currentProfile()).path, {
+			ip_address: online.joinAddress(lanHost, lanPort),
+			host_port: lanPort,
+			player_name: config.online.nickname,
+		});
+		return { ...prepared, ...(await launchOnline(false)) };
 	});
 	handle('online:stop', () => {
 		if (roomHost) {
@@ -344,8 +379,9 @@ function registerIpc() {
 }
 
 /**
- * 联机前的准备：装好联机组件 MOD，并在 settings.save 里启用它。MOD 总开关原本关着时，
- * 打开总开关并把其他 MOD 设为禁用，避免它们随之加载导致双方 MOD 不一致。
+ * 联机前的准备：把 Reforged MOD 与 BaseLib 装到游戏目录并在 settings.save 里启用。
+ * MOD 总开关原本关着时，打开总开关并把其他玩法 MOD 设为禁用，避免它们随之加载导致
+ * 双方 MOD 不一致；同时关掉旧的 LAN MOD 和早期的 STS2CottageOnline，避免两套补丁同时生效。
  */
 async function prepareOnlineLaunch() {
 	if (gameRunning) {
@@ -356,39 +392,41 @@ async function prepareOnlineLaunch() {
 	if (!info.ready) {
 		throw new Error('game_not_ready');
 	}
-	const { account } = saves.selectedAccount(config.settings);
+	if (!online.supportsVersion(info.version)) {
+		throw new Error('online_unsupported_version');
+	}
+	const account = onlineAccount(profile);
 	if (!account || !saves.readSettingsSave(account)) {
 		throw new Error('online_no_settings');
 	}
-	const updated = online.installOnlineMod(onlinePaths.mod(), info.modsDir);
-	const view = await modsView();
+	const updated = online.installLanMods(onlinePaths.mods(), info.modsDir);
+	const view = await modsView(account);
 	const disabledOthers = [];
 	editSettingsSave(json => {
 		const modSettings = mods.modSettingsOf(json);
+		const keep = new Set([online.LAN_MOD_ID, online.BASE_LIB_ID]);
 		if (!modSettings.mods_enabled) {
 			modSettings.mods_enabled = true;
 			for (const mod of view ? view.mods : []) {
-				if (mod.id !== online.MOD_ID && mod.enabled) {
+				if (!keep.has(mod.id) && mod.enabled) {
 					mods.setDisabled(json, mod.id, true);
 					disabledOthers.push(mod.name || mod.id);
 				}
 			}
 		}
-		mods.setDisabled(json, online.MOD_ID, false);
-	});
-	const gameplayMods = view ? view.mods.filter(m => m.id !== online.MOD_ID && m.enabled && !disabledOthers.includes(m.name || m.id)).map(m => m.name || m.id) : [];
+		mods.setDisabled(json, online.LAN_MOD_ID, false);
+		mods.setDisabled(json, online.BASE_LIB_ID, false);
+		mods.setDisabled(json, online.LEGACY_LAN_MOD_ID, true);
+		mods.setDisabled(json, online.COTTAGE_MOD_ID, true);
+		mods.fixLoadOrder(json, view.mods);
+	}, account);
+	const gameplayMods = view ? view.mods.filter(m => !keep.has(m.id) && m.enabled
+		&& !disabledOthers.includes(m.name || m.id)).map(m => m.name || m.id) : [];
 	return { version: info.version, componentUpdated: updated, disabledOthers, enabledMods: gameplayMods };
 }
 
-async function launchOnline(action, hosting) {
-	const saveRoot = saves.resolveSaveRoot(config.settings);
-	online.writePendingAction(saveRoot, { ...action, nickname: config.online.nickname, playerId: config.updateOnline({}).playerId });
-	try {
-		return await launchCurrent({ keepLauncher: hosting });
-	} catch (error) {
-		online.clearPendingAction(saveRoot);
-		throw error;
-	}
+async function launchOnline(hosting) {
+	return launchCurrent({ keepLauncher: hosting });
 }
 
 function notifyOnline() {
@@ -419,14 +457,9 @@ async function launchCurrent({ keepLauncher }) {
 		gameRunning = true;
 		result.child.once('exit', () => {
 			gameRunning = false;
-			// 房主退出游戏 = 关闭房间；没被游戏读走的指令也清掉。
+			// 房主退出游戏 = 关闭房间。
 			if (roomHost) {
 				roomHost.stop();
-			}
-			try {
-				online.clearPendingAction(saves.resolveSaveRoot(config.settings));
-			} catch (error) {
-				// 忽略。
 			}
 			if (mainWindow) {
 				if (mainWindow.isMinimized()) {
@@ -447,12 +480,6 @@ async function launchCurrent({ keepLauncher }) {
 
 app.whenReady().then(() => {
 	config = new LauncherConfig(dataDir());
-	// 全新打开启动器时清掉上次遗留的联机指令（同 Android GameSettingsActivity）。
-	try {
-		online.clearPendingAction(saves.resolveSaveRoot(config.settings));
-	} catch (error) {
-		// 忽略。
-	}
 	registerIpc();
 	createWindow();
 });

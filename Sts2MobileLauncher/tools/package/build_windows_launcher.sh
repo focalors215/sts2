@@ -4,9 +4,10 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 
-# 联机小屋：frp 助手（需要 Go）与 PC 联机组件 MOD（需要 .NET 9 + 原版 sts2.dll 引用）。
-# 缺工具时跳过并给出提示，启动器的联机小屋会显示“缺少联机组件”。
-for step in build-frp-helper build-online-mod; do
+# 联机小屋：frp 助手（需要 Go）、随启动器打包的局域网联机 MOD「LAN Multiplayer: Reforged」
+# 及其依赖 BaseLib（需要 .NET 9、原版 v0.107.1 程序集，BaseLib 从 Steam 创意工坊复制）。
+# 缺工具时跳过并给出提示，启动器的联机页会显示缺少联机组件。
+for step in build-frp-helper build-lan-mod; do
   if ! bash "$ROOT/tools/windows/$step.sh"; then
     if [[ "${STS2_REQUIRE_ONLINE:-0}" == "1" ]]; then
       exit 1

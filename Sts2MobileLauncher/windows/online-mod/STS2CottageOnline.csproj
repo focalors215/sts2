@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- PC 版联机组件：由 tools/windows/build-online-mod.sh 构建，引用目录 = 原版 v0.111.0 data 目录（sts2.dll / GodotSharp.dll / 0Harmony.dll）。 -->
+  <!-- PC 版联机组件：按 GameVersion 分别引用原版 v0.107.1 / v0.111.0 的 sts2.dll、GodotSharp.dll 与 0Harmony.dll。 -->
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
     <AssemblyName>STS2CottageOnline</AssemblyName>
@@ -9,6 +9,7 @@
     <LangVersion>latest</LangVersion>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <DefineConstants Condition="'$(GameVersion)' == 'v0.107.1'">$(DefineConstants);STS2_TARGET_1071</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="0Harmony">

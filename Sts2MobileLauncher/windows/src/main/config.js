@@ -24,6 +24,9 @@ class LauncherConfig {
 		this.directory = directory;
 		this.file = path.join(directory, 'launcher.json');
 		this.data = this.load();
+		if (this.loadedLegacyProfiles) {
+			this.save();
+		}
 	}
 
 	load() {
@@ -35,6 +38,7 @@ class LauncherConfig {
 		}
 		const profiles = Array.isArray(raw.profiles) ? raw.profiles.filter(p => p && typeof p.gameDir === 'string') : [];
 		const legacyProfiles = raw.version === undefined || raw.version === 1;
+		this.loadedLegacyProfiles = legacyProfiles && profiles.some(p => p.source === 'steam' && p.launchViaSteam === true);
 		return {
 			version: 2,
 			profiles: profiles.map(p => normalizeProfile(legacyProfiles && p.source === 'steam' ? { ...p, launchViaSteam: false } : p)),

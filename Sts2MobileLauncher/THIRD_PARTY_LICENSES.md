@@ -70,7 +70,8 @@
 | 名称 | URL | 用途 | 许可证/注意事项 |
 | --- | --- | --- | --- |
 | STS2-RitsuLib | <https://github.com/BAKAOLC/STS2-RitsuLib> | 常见前置 MOD 兼容性排查。 | MIT |
-| BaseLib-StS2 | <https://github.com/Alchyr/BaseLib-StS2> | 常见前置 MOD 兼容性排查；`port-mod/tests/BaseLibExtendedSave.Tests` 动态加载用户本机提供的 DLL，验证卡牌修改数据的真实 JSON 持久化，不复制其源码或分发其二进制。 | MIT；不新增 APK 内置 BaseLib 依赖。 |
+| BaseLib-StS2 | <https://github.com/Alchyr/BaseLib-StS2> | 常见前置 MOD 兼容性排查；`port-mod/tests/BaseLibExtendedSave.Tests` 动态加载用户本机提供的 DLL，验证卡牌修改数据的真实 JSON 持久化。Windows 启动器**内置** BaseLib（复制 Steam 创意工坊 id 3737335127 的 `BaseLib.dll` / `.json` / `.pck` 到 `windows/resources/online-mod/BaseLib/`，构建时生成，不入库），作为局域网联机 MOD 的前置。 | MIT；保留上游署名与许可说明。 |
+| SlayTheSpire2.LAN.Multiplayer.Reforged（LAN Multiplayer: Reforged） | <https://github.com/PageSecOnd/SlayTheSpire2.LAN.Multiplayer.Reforged>（创意工坊 id 3750220799） | Windows 启动器**内置**的局域网联机 MOD：`tools/windows/build-lan-mod.sh` 固定上游 commit `6623dcd793ed264ff80a5c5ac384ee94fd293110`，应用 `tools/windows/patches/0001-launcher-integration.patch`（关闭 Steam 时玩家名回退、避免重复帧回调）后构建 DLL，并用 `pack-godot-pck.py` 重新打包本地化 PCK；产物在 gitignored 的 `windows/resources/online-mod/SlayTheSpire2.LAN.Multiplayer.Reforged/`。 | **GNU GPL v3**（上游 `LICENSE` 随产物分发）。发布该二进制时须按 GPL 提供对应源码：固定 commit + 本仓库补丁即本构建的完整对应源码。便携 ZIP 把上游源码快照、补丁、manifest 与构建脚本放在 `sources/LAN-Multiplayer-Reforged/`；其他发布渠道须提供等价内容。上游说明不得与旧 `SlayTheSpire2.LAN.Multiplayer` 同时启用。 |
 | sts2-quickRestart | <https://github.com/freude916/sts2-quickRestart> | 快速重开 UI/流程兼容性参考。 | 未检测到标准 license；仅作本地参考。 |
 
 ## 发布前合规检查

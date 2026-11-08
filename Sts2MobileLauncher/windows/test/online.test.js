@@ -75,36 +75,80 @@ test('persists nickname and player id in launcher config', () => {
 	assert.strictEqual(again.updateOnline({ nickname: '' }).nickname, '玩家');
 });
 
-test('writes and clears the pending action under the game user dir', () => {
-	const root = tempDir();
-	online.writePendingAction(root, { type: 'join', host: '1.2.3.4', port: 33775 });
-	const action = JSON.parse(fs.readFileSync(path.join(root, 'launcher', 'pending-action.json'), 'utf8'));
-	assert.strictEqual(action.type, 'join');
-	assert.strictEqual(action.v, 1);
-	assert.ok(Math.abs(action.created - Date.now() / 1000) < 5);
-	online.clearPendingAction(root);
-	assert.ok(!fs.existsSync(online.pendingActionPath(root)));
+test('supports only the game version the bundled LAN mod was built for', () => {
+	assert.deepStrictEqual(online.SUPPORTED_VERSIONS, ['v0.107.1']);
+	assert.strictEqual(online.supportsVersion('v0.107.1'), true);
+	assert.strictEqual(online.supportsVersion('v0.111.0'), false);
+	assert.strictEqual(online.supportsVersion(''), false);
 });
 
-test('installs the online component MOD only when it changed', () => {
-	const source = tempDir();
+test('formats join addresses as IP:port, bracketing IPv6', () => {
+	assert.strictEqual(online.joinAddress('1.2.3.4', 33771), '1.2.3.4:33771');
+	assert.strictEqual(online.joinAddress('  example.test  ', '33772'), 'example.test:33772');
+	assert.strictEqual(online.joinAddress('::1', 33771), '[::1]:33771');
+	assert.strictEqual(online.joinAddress('[fe80::1]', 33771), '[fe80::1]:33771');
+});
+
+test('merges the LAN mod settings file and keeps unknown fields', () => {
+	const account = tempDir();
+	assert.deepStrictEqual(online.readLanSettings(account), {});
+	const first = online.writeLanSettings(account, { host_port: 33771, player_name: '喵喵零' });
+	assert.deepStrictEqual(first, { host_port: 33771, player_name: '喵喵零' });
+	const file = online.lanSettingsPath(account);
+	assert.strictEqual(file, path.join(account, 'mods', online.LAN_SETTINGS_FILE));
+	const second = online.writeLanSettings(account, { ip_address: '1.2.3.4:33772', host_port: 33772 });
+	assert.deepStrictEqual(second, { host_port: 33772, player_name: '喵喵零', ip_address: '1.2.3.4:33772' });
+	assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')), second);
+	assert.deepStrictEqual(fs.readdirSync(path.dirname(file)), [online.LAN_SETTINGS_FILE]);
+});
+
+test('reports whether the bundled LAN mod and BaseLib are ready and installed', () => {
+	const resources = tempDir();
 	const modsDir = path.join(tempDir(), 'mods');
-	assert.throws(() => online.installOnlineMod(source, modsDir), /online_component_missing/);
-	fs.writeFileSync(path.join(source, 'STS2CottageOnline.dll'), 'dll');
-	fs.writeFileSync(path.join(source, 'STS2CottageOnline.json'), '{"id":"STS2CottageOnline"}');
-	assert.strictEqual(online.installOnlineMod(source, modsDir), true);
-	assert.strictEqual(online.installOnlineMod(source, modsDir), false);
-	fs.writeFileSync(path.join(source, 'STS2CottageOnline.dll'), 'dll v2');
-	assert.strictEqual(online.installOnlineMod(source, modsDir), true);
-	assert.strictEqual(fs.readFileSync(path.join(modsDir, 'STS2CottageOnline', 'STS2CottageOnline.dll'), 'utf8'), 'dll v2');
+	assert.strictEqual(online.modsReady(resources), false);
+	assert.strictEqual(online.modsInstalled(modsDir), false);
+	for (const [id, files] of [[online.LAN_MOD_ID, online.LAN_MOD_FILES], [online.BASE_LIB_ID, online.BASE_LIB_FILES]]) {
+		const dir = online.modSourceDir(resources, id);
+		fs.mkdirSync(dir, { recursive: true });
+		files.slice(0, id === online.BASE_LIB_ID ? -1 : undefined).forEach(name => fs.writeFileSync(path.join(dir, name), 'x'));
+	}
+	assert.strictEqual(online.modsReady(resources), false, 'BaseLib is missing a file');
+	fs.writeFileSync(path.join(online.modSourceDir(resources, online.BASE_LIB_ID), online.BASE_LIB_FILES.at(-1)), 'x');
+	assert.strictEqual(online.modsReady(resources), true);
+	assert.strictEqual(online.modsInstalled(modsDir), false);
+	assert.strictEqual(online.modsInstalled(''), false);
+});
+
+test('installs the LAN mod and BaseLib only when they changed', () => {
+	const resources = tempDir();
+	const modsDir = path.join(tempDir(), 'mods');
+	assert.throws(() => online.installLanMods(resources, modsDir), /online_component_missing/);
+	for (const [id, files] of [[online.LAN_MOD_ID, online.LAN_MOD_FILES], [online.BASE_LIB_ID, online.BASE_LIB_FILES]]) {
+		const dir = online.modSourceDir(resources, id);
+		fs.mkdirSync(dir, { recursive: true });
+		files.forEach(name => fs.writeFileSync(path.join(dir, name), `${id}:${name}`));
+	}
+	assert.strictEqual(online.installLanMods(resources, modsDir), true);
+	assert.strictEqual(online.modsInstalled(modsDir), true);
+	assert.strictEqual(online.installLanMods(resources, modsDir), false);
+	fs.writeFileSync(path.join(online.modSourceDir(resources, online.LAN_MOD_ID), `${online.LAN_MOD_ID}.dll`), 'dll v2');
+	assert.strictEqual(online.installLanMods(resources, modsDir), true);
+	assert.strictEqual(fs.readFileSync(path.join(modsDir, online.LAN_MOD_ID, `${online.LAN_MOD_ID}.dll`), 'utf8'), 'dll v2');
 });
 
 test('detects an unfinished multiplayer run', () => {
 	const account = tempDir();
 	assert.strictEqual(online.hasMultiplayerSave(account), false);
-	fs.mkdirSync(path.join(account, 'profile2', 'saves'), { recursive: true });
-	fs.writeFileSync(path.join(account, 'profile2', 'saves', 'current_run_mp.save'), '{}');
+	assert.strictEqual(online.hasMultiplayerSave(''), false);
+	// Reforged 在启用 MOD 后写 modded/profileN/saves/current_lan_run_mp.save。
+	fs.mkdirSync(path.join(account, 'modded', 'profile2', 'saves'), { recursive: true });
+	fs.writeFileSync(path.join(account, 'modded', 'profile2', 'saves', 'current_lan_run_mp.save'), '{}');
 	assert.strictEqual(online.hasMultiplayerSave(account), true);
+	// 旧的小屋组件写在未启用 MOD 的 profileN/saves/current_run_mp.save。
+	const plain = tempDir();
+	fs.mkdirSync(path.join(plain, 'profile1', 'saves'), { recursive: true });
+	fs.writeFileSync(path.join(plain, 'profile1', 'saves', 'current_run_mp.save'), '{}');
+	assert.strictEqual(online.hasMultiplayerSave(plain), true);
 });
 
 test('loads the build-time server config', () => {

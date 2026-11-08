@@ -1,0 +1,13 @@
+{
+  "id": "SlayTheSpire2.LAN.Multiplayer.Reforged",
+  "name": "LAN Multiplayer: Reforged",
+  "author": "PageSecOnd",
+  "description": "LAN multiplayer host/join UI, custom host port and max players. Bundled by the STS2 Cottage launcher with small launcher fixes; see LICENSE and NOTICE.md.",
+  "version": "1.0.0",
+  "has_pck": true,
+  "has_dll": true,
+  "dependencies": [
+    { "id": "BaseLib" }
+  ],
+  "affects_gameplay": true
+}

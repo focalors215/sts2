@@ -5,7 +5,12 @@
  * 中心 frp 服务器上 SLOT_COUNT 个槽位，槽位 i 把房主本机 UDP 33771 映射到服务器 UDP
  * FIRST_GAME_PORT + i，并把一张 JSON 房间卡发布在服务器 TCP FIRST_CARD_PORT + i；
  * 其他玩家探测这些 TCP 端口列出房间，直接连服务器的 UDP 端口加入。只有房主运行 frp。
- * 游戏侧由联机组件 MOD（online-mod/STS2CottageOnline）读取 pending-action.json 开房 / 加入。
+ *
+ * 游戏内联机由随启动器打包的第三方 MOD「LAN Multiplayer: Reforged」+ 其依赖 BaseLib
+ * 实现：启动器把两个 MOD 装到 <游戏目录>/mods/、在 settings.save 里启用，并把房间地址写进
+ * MOD 的 lan_settings.json；玩家在游戏「多人游戏 → 局域网」里点开房 / 加入（MOD 没有命令
+ * 行或一次性指令入口，最后一步只能在游戏界面完成）。开房端口固定为 LOCAL_GAME_PORT，
+ * 与 frp 隧道对应。
  */
 const fs = require('fs');
 const path = require('path');
@@ -21,8 +26,42 @@ const SLOT_COUNT = 20;
 const SCAN_TIMEOUT_MS = 2500;
 const START_TIMEOUT_MS = 20000;
 const MAX_CARD_BYTES = 8192;
-const MOD_ID = 'STS2CottageOnline';
-const MOD_FILES = [`${MOD_ID}.dll`, `${MOD_ID}.json`];
+const LAN_MOD_ID = 'SlayTheSpire2.LAN.Multiplayer.Reforged';
+const LAN_MOD_FILES = [`${LAN_MOD_ID}.json`, `${LAN_MOD_ID}.dll`, `${LAN_MOD_ID}.pck`];
+const BASE_LIB_ID = 'BaseLib';
+const BASE_LIB_FILES = ['BaseLib.json', 'BaseLib.dll', 'BaseLib.pck'];
+// 本仓库自带的是对 v0.107.1 原版程序集编译的 MOD 构建；其它版本需要按对应程序集重新构建。
+const SUPPORTED_VERSIONS = ['v0.107.1'];
+// 旧的写死端口的 LAN MOD 与 Reforged 不能同时启用。
+const LEGACY_LAN_MOD_ID = 'SlayTheSpire2.LAN.Multiplayer';
+// 早期版本由启动器自己安装的联机组件；改用 Reforged 后必须关掉，避免两套补丁同时生效。
+const COTTAGE_MOD_ID = 'STS2CottageOnline';
+const LAN_SETTINGS_FILE = 'lan_settings.json';
+
+function supportsVersion(version) {
+	return SUPPORTED_VERSIONS.includes(version);
+}
+
+/** 随启动器打包的 LAN MOD / BaseLib 资源目录（resources/online-mod/<id>/）。 */
+function modSourceDir(resourcesDir, id) {
+	return path.join(resourcesDir, id);
+}
+
+function hasFiles(dir, names) {
+	return names.every(name => fs.existsSync(path.join(dir, name)));
+}
+
+/** 两个 MOD 的打包资源是否齐全（缺任何一个都不能进联机）。 */
+function modsReady(resourcesDir) {
+	return hasFiles(modSourceDir(resourcesDir, LAN_MOD_ID), LAN_MOD_FILES)
+		&& hasFiles(modSourceDir(resourcesDir, BASE_LIB_ID), BASE_LIB_FILES);
+}
+
+/** 游戏目录里是否已经装好两个 MOD（界面用来显示状态）。 */
+function modsInstalled(modsDir) {
+	return !!modsDir && hasFiles(path.join(modsDir, LAN_MOD_ID), LAN_MOD_FILES)
+		&& hasFiles(path.join(modsDir, BASE_LIB_ID), BASE_LIB_FILES);
+}
 
 /** 构建时由 scripts/prepare-assets.js 从 .env（STS2_FRP_SERVER / _PORT / _TOKEN）写入，不入库。 */
 function loadServerConfig(file) {
@@ -343,51 +382,86 @@ function localIpv4Addresses() {
 	return out;
 }
 
-/** 当前账号是否有未完成的多人存档（profileN/saves/current_run_mp.save），用于房间卡“继续存档”。 */
+/**
+ * 当前账号是否有未完成的多人存档，用于房间卡“继续存档”。
+ * 小屋联机组件写 current_run_mp.save，Reforged 写 current_lan_run_mp.save；
+ * 启用 MOD 后存档位于 <账号>/modded/profileN/saves/，两种位置都检查。
+ */
 function hasMultiplayerSave(accountDir) {
 	if (!accountDir) {
 		return false;
 	}
-	let entries;
-	try {
-		entries = fs.readdirSync(accountDir, { withFileTypes: true });
-	} catch (error) {
-		return false;
-	}
-	return entries.some(entry => entry.isDirectory() && entry.name.startsWith('profile')
-		&& ['current_run_mp.save', 'current_run_mp.save.backup'].some(name => fs.existsSync(path.join(accountDir, entry.name, 'saves', name))));
-}
-
-/** 一次性指令，游戏主菜单就绪时由联机组件读取并删除（user://launcher/pending-action.json）。 */
-function pendingActionPath(saveRoot) {
-	return path.join(saveRoot, 'launcher', 'pending-action.json');
-}
-
-function writePendingAction(saveRoot, action) {
-	const file = pendingActionPath(saveRoot);
-	fs.mkdirSync(path.dirname(file), { recursive: true });
-	const temp = `${file}.${process.pid}.tmp`;
-	fs.writeFileSync(temp, JSON.stringify({ v: 1, created: Math.floor(Date.now() / 1000), ...action }), 'utf8');
-	fs.renameSync(temp, file);
-}
-
-function clearPendingAction(saveRoot) {
-	fs.rmSync(pendingActionPath(saveRoot), { force: true });
-}
-
-/** 把联机组件复制到 <游戏目录>/mods/STS2CottageOnline/（内容相同则不动）；返回是否有更新。 */
-function installOnlineMod(sourceDir, modsDir) {
-	for (const name of MOD_FILES) {
-		if (!fs.existsSync(path.join(sourceDir, name))) {
-			throw new Error('online_component_missing');
+	const names = ['current_run_mp.save', 'current_run_mp.save.backup', 'current_lan_run_mp.save', 'current_lan_run_mp.save.backup'];
+	const search = (dir, depth) => {
+		let entries;
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		} catch (error) {
+			return false;
 		}
+		if (entries.some(entry => entry.isDirectory() && entry.name.startsWith('profile')
+			&& names.some(name => fs.existsSync(path.join(dir, entry.name, 'saves', name))))) {
+			return true;
+		}
+		if (depth >= 2) {
+			return false;
+		}
+		return entries.some(entry => entry.isDirectory() && !entry.name.startsWith('.')
+			&& search(path.join(dir, entry.name), depth + 1));
+	};
+	return search(accountDir, 0);
+}
+
+/** Reforged MOD 的配置文件：<账号目录>/mods/lan_settings.json。 */
+function lanSettingsPath(accountDir) {
+	return path.join(accountDir, 'mods', LAN_SETTINGS_FILE);
+}
+
+function readLanSettings(accountDir) {
+	try {
+		const raw = JSON.parse(fs.readFileSync(lanSettingsPath(accountDir), 'utf8'));
+		return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+	} catch (error) {
+		return {};
 	}
-	const target = path.join(modsDir, MOD_ID);
+}
+
+/**
+ * 合并写入 lan_settings.json（保留 MOD 自己的其它字段）。MOD 在游戏启动时读取它：
+ * 加入界面预填 ip_address（支持 IP:端口），开房用 host_port。
+ */
+function writeLanSettings(accountDir, patch) {
+	const dir = path.join(path.dirname(lanSettingsPath(accountDir)));
+	fs.mkdirSync(dir, { recursive: true });
+	const merged = { ...readLanSettings(accountDir), ...patch };
+	const file = lanSettingsPath(accountDir);
+	const temp = `${file}.${process.pid}.tmp`;
+	fs.writeFileSync(temp, JSON.stringify(merged), 'utf8');
+	fs.renameSync(temp, file);
+	return merged;
+}
+
+/** 加入地址：MOD 的解析器接受 IP:端口（IPv6 需方括号）。 */
+function joinAddress(host, port) {
+	const text = String(host || '').trim().replace(/^\[(.*)\]$/, '$1');
+	const address = text.includes(':') ? `[${text}]` : text;
+	return `${address}:${Number(port)}`;
+}
+
+/** 把 <resourcesDir>/online-mod/<id>/ 下的文件复制到 <modsDir>/<id>/（内容相同则不动）。 */
+function installModDir(sourceDir, modsDir, id, requiredFiles) {
+	if (!hasFiles(sourceDir, requiredFiles)) {
+		throw new Error('online_component_missing');
+	}
+	const target = path.join(modsDir, id);
 	fs.mkdirSync(target, { recursive: true });
 	let changed = false;
-	for (const name of MOD_FILES) {
-		const from = path.join(sourceDir, name);
-		const to = path.join(target, name);
+	for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+		if (!entry.isFile()) {
+			continue;
+		}
+		const from = path.join(sourceDir, entry.name);
+		const to = path.join(target, entry.name);
 		const incoming = fs.readFileSync(from);
 		if (fs.existsSync(to) && fs.readFileSync(to).equals(incoming)) {
 			continue;
@@ -400,12 +474,30 @@ function installOnlineMod(sourceDir, modsDir) {
 	return changed;
 }
 
+/** 安装 Reforged MOD 与 BaseLib；返回是否有更新。 */
+function installLanMods(resourcesDir, modsDir) {
+	const reforged = installModDir(modSourceDir(resourcesDir, LAN_MOD_ID), modsDir, LAN_MOD_ID, LAN_MOD_FILES);
+	const baseLib = installModDir(modSourceDir(resourcesDir, BASE_LIB_ID), modsDir, BASE_LIB_ID, BASE_LIB_FILES);
+	return reforged || baseLib;
+}
+
 module.exports = {
 	LOCAL_GAME_PORT,
 	FIRST_GAME_PORT,
 	FIRST_CARD_PORT,
 	SLOT_COUNT,
-	MOD_ID,
+	LAN_MOD_ID,
+	LAN_MOD_FILES,
+	BASE_LIB_ID,
+	BASE_LIB_FILES,
+	LEGACY_LAN_MOD_ID,
+	COTTAGE_MOD_ID,
+	LAN_SETTINGS_FILE,
+	SUPPORTED_VERSIONS,
+	supportsVersion,
+	modSourceDir,
+	modsReady,
+	modsInstalled,
 	loadServerConfig,
 	normalizeNickname,
 	newPlayerId,
@@ -417,8 +509,9 @@ module.exports = {
 	RoomHost,
 	localIpv4Addresses,
 	hasMultiplayerSave,
-	pendingActionPath,
-	writePendingAction,
-	clearPendingAction,
-	installOnlineMod,
+	lanSettingsPath,
+	readLanSettings,
+	writeLanSettings,
+	joinAddress,
+	installLanMods,
 };

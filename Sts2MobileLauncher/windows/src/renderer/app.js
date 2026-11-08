@@ -22,6 +22,7 @@ const CONTENT_TOP = 40;
 const CONTENT_BOTTOM = 960;
 const STEAM_APP_ID = '2868840';
 const REPO_URL = 'https://github.com/ModinMobileSTS/Sts2MobileLauncher';
+const LAN_MOD_URL = 'https://steamcommunity.com/sharedfiles/filedetails/?id=3750220799';
 
 const ui = {
 	state: null,
@@ -108,7 +109,7 @@ function switchControl(checked, onChange, disabled, label) {
 function formatError(error) {
 	const message = error && error.message ? error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(error);
 	const known = { no_profile: 'err_no_profile', game_not_ready: 'err_game_not_ready', game_running: 'err_game_running', no_settings_save: 'err_no_settings_save', no_manifest: 'no_manifest',
-		online_not_configured: 'online_not_configured', online_component_missing: 'online_component_missing', online_no_settings: 'online_no_settings', online_bad_address: 'online_bad_address' };
+		online_not_configured: 'online_not_configured', online_component_missing: 'online_mod_missing', online_no_settings: 'online_no_settings', online_bad_address: 'online_bad_address', online_unsupported_version: 'online_unsupported_version' };
 	return known[message] ? t(known[message]) : t('error', { message });
 }
 
@@ -838,29 +839,39 @@ function buildSystemSettings(inner, grid) {
 function buildNetworkPage(inner) {
 	const net = ui.state.online;
 	inner.append(h('div', { class: 'page-header' }, pageTitle(t('nav_network'), t('tagline_network'))));
-	if (!net.componentReady) {
-		inner.append(h('div', { class: 'card compact notice warn' }, icon('warning'), h('span', {}, t('online_component_missing'))));
-		return;
-	}
 	const profile = currentProfile();
 	if (!profile) {
 		inner.append(h('div', { class: 'card compact notice' }, icon('info'), h('span', {}, t('err_no_profile'))),
 			h('div', {}, h('button', { class: 'btn secondary small', onclick: () => openTab('versions') }, icon('layers'), t('nav_versions'))));
 		return;
 	}
+	if (!net.versionSupported) {
+		inner.append(h('div', { class: 'card compact notice warn' }, icon('warning'), h('span', {}, t('online_unsupported_version'))));
+		return;
+	}
+	if (!net.modReady) {
+		inner.append(h('div', { class: 'card compact notice warn' }, icon('warning'), h('span', {}, t('online_mod_missing'))));
+		return;
+	}
 	if (net.hosting.state !== 'idle') {
 		inner.append(hostingCard(net));
 	}
 	inner.append(nicknameCard(net));
+	inner.append(h('div', { class: 'card compact notice' }, icon('info'),
+		h('span', { class: 'grow' }, t('online_steps')),
+		h('button', { class: 'btn ghost small', onclick: () => api.openExternal(LAN_MOD_URL) }, icon('open_in_new'), t('online_mod_link'))));
 
 	inner.append(h('h2', { class: 'section-heading' }, t('online_title')));
 	if (!net.configured) {
 		inner.append(h('div', { class: 'card compact notice warn' }, icon('cloud_off'), h('span', {}, t('online_not_configured'))));
 	} else {
+		if (!net.helperReady) {
+			inner.append(h('div', { class: 'card compact notice warn' }, icon('warning'), h('span', {}, t('online_helper_missing'))));
+		}
 		const create = h('div', { class: 'setting' }, icon('add_home', 'lead'),
 			h('div', { class: 'grow' }, h('div', { class: 'setting-title' }, t('online_create_title')),
 				h('div', { class: 'setting-desc' }, net.continuing ? t('online_create_continuing') : t('online_create_desc'))),
-			h('button', { class: 'btn primary small', disabled: net.hosting.state !== 'idle', onclick: createRoom }, icon('rocket_launch'), t('online_create_button')));
+			h('button', { class: 'btn primary small', disabled: !net.helperReady || net.hosting.state !== 'idle', onclick: createRoom }, icon('rocket_launch'), t('online_create_button')));
 		inner.append(create);
 		inner.append(h('div', { class: 'row wrap' }, h('h2', { class: 'section-heading grow' }, t('online_rooms_title')),
 			h('button', { class: 'btn secondary small', disabled: ui.scanning, onclick: scanRooms }, icon('refresh'), ui.scanning ? t('online_scanning') : t('refresh'))));
@@ -917,7 +928,7 @@ function nicknameCard(net) {
 }
 
 function roomCard(room, net) {
-	const mismatch = net.gameVersion && room.version !== 'unknown' && room.version !== net.gameVersion;
+	const mismatch = !net.gameVersion || room.version !== net.gameVersion;
 	let meta = t('online_room_version', { version: room.version });
 	if (room.continuing) {
 		meta += t('online_room_continuing');
@@ -929,7 +940,7 @@ function roomCard(room, net) {
 		h('div', { class: 'mod-head' }, icon(mismatch ? 'warning' : 'meeting_room', 'muted'),
 			h('div', { class: 'grow' }, h('div', { class: 'mod-name ellipsis' }, room.name || t('online_unnamed_room')), h('div', { class: 'mod-meta ellipsis' }, meta)),
 			mismatch ? h('span', { class: 'pill bad' }, t('online_version_differs')) : null,
-			h('button', { class: 'btn primary small', disabled: net.hosting.state !== 'idle', onclick: () => launchOnline(() => api.onlineJoin(room.host, room.port), t('online_joining')) }, t('online_join'))));
+			h('button', { class: 'btn primary small', disabled: mismatch || net.hosting.state !== 'idle', onclick: () => launchOnline(() => api.onlineJoin(room.host, room.port), t('online_joining')) }, mismatch ? t('online_version_differs') : t('online_join'))));
 }
 
 async function scanRooms() {
