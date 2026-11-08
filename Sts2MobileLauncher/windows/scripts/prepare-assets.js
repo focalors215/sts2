@@ -39,10 +39,11 @@ function readDotEnv(file) {
 const dotEnv = readDotEnv(path.join(root, '.env'));
 const env = name => process.env[name] !== undefined ? process.env[name] : dotEnv[name] || '';
 const onlineFile = path.join(out, 'online.json');
-if (env('STS2_FRP_SERVER')) {
+// 公开发行包不应泄露共享 FRP 令牌；仅本机显式选择私有构建时写入。
+if (process.env.STS2_EMBED_FRP_TOKEN === '1' && env('STS2_FRP_SERVER')) {
 	fs.writeFileSync(onlineFile, JSON.stringify({ server: env('STS2_FRP_SERVER'), serverPort: Number.parseInt(env('STS2_FRP_SERVER_PORT'), 10) || 7000, token: env('STS2_FRP_TOKEN') }));
 } else {
 	fs.rmSync(onlineFile, { force: true });
-	console.warn('STS2_FRP_SERVER not set: the online room list will show "not configured".');
+	console.warn('Online rooms are disabled in this build; LAN direct connection remains available.');
 }
 console.log(`shared assets copied to ${path.relative(process.cwd(), out) || out}`);
