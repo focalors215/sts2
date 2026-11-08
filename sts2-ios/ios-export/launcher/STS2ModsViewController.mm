@@ -1,6 +1,8 @@
 #import "STS2ModsViewController.h"
 #import "STS2ModStore.h"
 #import "STS2Theme.h"
+#import "STS2Log.h"
+#import "STS2WorkshopViewController.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 @interface STS2ModsViewController () <UIDocumentPickerDelegate>
 @property STS2ModStore *store;
@@ -30,7 +32,7 @@
 }
 - (instancetype)initWithStore:(STS2ModStore *)store {if((self=[super initWithStyle:UITableViewStyleInsetGrouped])){_store=store;_mods=@[];self.title=@"本地 MOD";}return self;}
 - (instancetype)initWithDocumentsURL:(NSURL *)documentsURL {self=[self initWithStore:[[STS2ModStore alloc]initWithDocumentsURL:documentsURL]];if(self)_documentsURL=documentsURL;return self;}
-- (void)viewDidLoad {[super viewDidLoad];self.tableView.rowHeight=UITableViewAutomaticDimension;self.tableView.estimatedRowHeight=80;self.view.backgroundColor=UIColor.clearColor;self.tableView.backgroundColor=UIColor.clearColor;self.tableView.tintColor=STS2Theme.cat;[self reloadMods];}
+- (void)viewDidLoad {[super viewDidLoad];self.tableView.rowHeight=UITableViewAutomaticDimension;self.tableView.estimatedRowHeight=80;self.view.backgroundColor=UIColor.clearColor;self.tableView.backgroundColor=UIColor.clearColor;self.tableView.tintColor=STS2Theme.cat;[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(reloadMods) name:STS2ModsDidChangeNotification object:nil];[self reloadMods];}
 - (void)reloadMods {
     [self beginOperation];
     [self.store loadWithCompletion:^(NSArray *mods, NSError *error) {
@@ -49,7 +51,7 @@
         });
     }];
 }
-- (void)showError:(NSError *)error {UIAlertController *a=[UIAlertController alertControllerWithTitle:@"操作未完成" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];[a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];[self presentViewController:a animated:YES completion:nil];}
+- (void)showError:(NSError *)error {[STS2Log log:STS2LogLevelError tag:STS2LogTagMods message:@"MOD 操作未完成" detail:error];UIAlertController *a=[UIAlertController alertControllerWithTitle:@"操作未完成" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];[a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];[self presentViewController:a animated:YES completion:nil];}
 - (NSArray *)group:(NSInteger)section {NSPredicate *p=[NSPredicate predicateWithBlock:^BOOL(NSDictionary *m,NSDictionary *bindings){BOOL enabledType=[m[@"resourceSafe"] boolValue]||[m[@"compiledSupported"] boolValue];return enabledType==(section==1);}];return [self.mods filteredArrayUsingPredicate:p];}
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {return 3;}
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {return section==0?1:MAX(1,[self group:section].count);}

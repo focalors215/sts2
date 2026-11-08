@@ -33,6 +33,8 @@ compat.default_reference_flavor=original-v0.111.0
 # Use "matrix" for one schema-2 family pack. Set "legacy" only when you need
 # per-version branch packs for back-compat diagnostics.
 compat.pack_build_mode=matrix
+# 可选：只构建部分 matrix target（逗号分隔），用于本机只有部分原版引用时，例如 v0.107.1,v0.111.0；留空构建全部 active target。
+compat.matrix_targets=
 compat.bundled_packs_config=tools/android/bundled-compat-packs.json
 compat.asset_dir=android/assets/compat_packs
 compat.worktree_root=.agent/worktrees/compat-packs

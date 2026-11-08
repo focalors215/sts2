@@ -31,7 +31,9 @@ public final class WebDavSettings {
 	}
 
 	public static Config readConfig(Context context) {
-		Config config = readSafely(context, prefs -> new Config(
+		Config config = readSafely(context, prefs -> {
+			com.godot.game.LauncherLog.registerSecret(prefs.getString(KEY_PASSWORD, ""));
+			return new Config(
 			trim(prefs.getString(KEY_BASE_URL, "")),
 			trim(prefs.getString(KEY_USERNAME, "")),
 			prefs.getString(KEY_PASSWORD, "") == null ? "" : prefs.getString(KEY_PASSWORD, ""),
@@ -42,8 +44,8 @@ public final class WebDavSettings {
 			optionalLong(prefs, KEY_LAST_MANIFEST_AT_MS),
 			optionalLong(prefs, KEY_LAST_PULL_AT_MS),
 			optionalLong(prefs, KEY_LAST_PUSH_AT_MS),
-			trim(prefs.getString(KEY_LAST_ERROR, ""))
-		));
+			trim(prefs.getString(KEY_LAST_ERROR, "")));
+		});
 		return config == null ? Config.empty() : config;
 	}
 

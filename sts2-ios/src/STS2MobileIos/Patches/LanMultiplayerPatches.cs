@@ -49,18 +49,23 @@ public static class LanMultiplayerPatches
     }
 
     // The original method renames an MP save as broken if canonicalization throws.
-    // An identity mismatch is recoverable configuration, so reject before that path.
+    // 规范 §3.4 第 3 条：先 playerId（加入方）再 1（房主），都不在就在原版之前拒绝，存档原样保留。
     public static bool CanonicalizePrefix(RunSaveManager __instance, ref ulong localPlayerId,
         ref ReadSaveResult<SerializableRun> __result)
     {
         var stableId = LauncherConfigPatches.LocalPeerId;
-        localPlayerId = stableId;
         var raw = __instance.LoadMultiplayerRunSave();
-        if (raw?.Success != true || raw.SaveData == null) return true;
-        if (raw.SaveData.Players.Any(p => p.NetId == stableId)) return true;
-        const string message = "LAN player ID does not match multiplayer save. Restore network.playerId from the original launcher config. The save has been preserved.";
-        PatchHelper.Log(message);
-        __result = new ReadSaveResult<SerializableRun>(ReadSaveStatus.ValidationFailed, message);
+        if (raw?.Success != true || raw.SaveData == null) { localPlayerId = stableId; return true; }
+        var saveIds = raw.SaveData.Players.Select(p => p.NetId).ToList();
+        var role = MultiplayerIdentity.Resolve(saveIds, stableId, out var identity);
+        if (role != MultiplayerIdentity.Role.Mismatch)
+        {
+            OnlineRoomLog.Info($"续局身份: {(role == MultiplayerIdentity.Role.Host ? "房主" : "加入方")} id={identity} save=[{string.Join(",", saveIds)}] local={stableId}");
+            localPlayerId = identity;
+            return true;
+        }
+        OnlineRoomLog.Error($"续局身份不匹配: save=[{string.Join(",", saveIds)}] local={stableId}，已拒绝并保留存档。");
+        __result = new ReadSaveResult<SerializableRun>(ReadSaveStatus.ValidationFailed, MultiplayerIdentity.MismatchMessage);
         return false;
     }
 
@@ -70,11 +75,19 @@ public static class LanMultiplayerPatches
         return false;
     }
 
+    // 规范 §3.4 第 4 条：只有身份是房主（存档里本机为 1）才允许用 ENet 开房续局。
     public static bool LoadedHostPrefix(NMultiplayerSubmenu __instance, SerializableRun run, ref Task __result)
     {
-        if (!run.Players.Any(p => p.NetId == LauncherConfigPatches.LocalPeerId))
+        var stableId = LauncherConfigPatches.LocalPeerId;
+        var saveIds = run.Players.Select(p => p.NetId).ToList();
+        var role = MultiplayerIdentity.Resolve(saveIds, stableId, out _);
+        if (role != MultiplayerIdentity.Role.Host)
         {
-            ShowInfo("无法继续多人存档", "当前玩家 ID 不在这个存档中。请恢复创建该存档时 Launcher/config.json 中的 network.playerId；不要删除原存档。");
+            var joiner = role == MultiplayerIdentity.Role.Joiner;
+            OnlineRoomLog.Error(joiner
+                ? $"拒绝开房续局: 本机在存档里是加入方 save=[{string.Join(",", saveIds)}] local={stableId}"
+                : $"续局身份不匹配: save=[{string.Join(",", saveIds)}] local={stableId}，已拒绝开房并保留存档。");
+            ShowInfo("无法继续多人存档", joiner ? MultiplayerIdentity.JoinerCannotHostMessage : MultiplayerIdentity.MismatchMessage);
             __result = Task.CompletedTask;
             return false;
         }
@@ -92,6 +105,7 @@ public static class LanMultiplayerPatches
             var error = service.StartENetHost((ushort)LauncherConfigPatches.Port, Capacity);
             if (error.HasValue)
             {
+                OnlineRoomLog.Error($"ENet 开房失败: UDP {LauncherConfigPatches.Port} | {error.Value}");
                 NModalContainer.Instance.Add(NErrorPopup.Create(error.Value));
                 return Task.CompletedTask;
             }
@@ -125,6 +139,7 @@ public static class LanMultiplayerPatches
                         custom.InitializeMultiplayerAsHost(service, Capacity); stack.Push(custom); break;
                 }
             }
+            OnlineRoomLog.Info($"ENet 房间已开启: UDP {LauncherConfigPatches.Port}，{(run != null ? "续局" : "新局")}，模式 {mode}");
             // Online rooms are announced through the launcher's room list; no popup over the lobby.
             if (!RemoteRoomPatches.HostingOnlineRoom)
                 ShowInfo("ENet 房间已开启", $"UDP 端口：{LauncherConfigPatches.Port}。其他玩家输入本机 Wi-Fi IP 加入。公网连接需要可达的 UDP 端口转发或 VPN。游戏仍会检查版本与 MOD。");
@@ -132,7 +147,7 @@ public static class LanMultiplayerPatches
         catch (Exception e)
         {
             service?.Disconnect(NetError.InternalError);
-            PatchHelper.Log($"LAN host failed: {e}");
+            OnlineRoomLog.Error($"开房失败: UDP {LauncherConfigPatches.Port}", e);
             ShowInfo("开房失败", e.Message);
         }
         finally { overlay.Visible = false; }
@@ -164,13 +179,14 @@ public static class LanMultiplayerPatches
         LauncherConfigPatches.Port = port;
         LauncherConfigPatches.Nickname = panel.GetNode<LineEdit>("Nickname").Text;
         screen.SetMeta("ios_lan_joining", true);
+        OnlineRoomLog.Info($"游戏内加入 {host}:{port}，playerId={LauncherConfigPatches.LocalPeerId}");
         try
         {
             // v0.111.0 JoinGameAsync itself constructs the versioned NetClientGameService
             // and JoinFlow, stores _currentJoinFlow, and keeps cancellation/error UI.
             await screen.JoinGameAsync(new ENetClientConnectionInitializer(LauncherConfigPatches.LocalPeerId, host, port));
         }
-        catch (Exception e) { PatchHelper.Log($"LAN join failed: {e}"); if (GodotObject.IsInstanceValid(screen)) ShowInfo("加入失败", e.Message); }
+        catch (Exception e) { OnlineRoomLog.Error($"加入 {host}:{port} 失败", e); if (GodotObject.IsInstanceValid(screen)) ShowInfo("加入失败", e.Message); }
         finally { if (GodotObject.IsInstanceValid(screen)) screen.SetMeta("ios_lan_joining", false); }
     }
 

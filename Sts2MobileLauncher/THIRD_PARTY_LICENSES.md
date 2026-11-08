@@ -70,7 +70,7 @@
 | 名称 | URL | 用途 | 许可证/注意事项 |
 | --- | --- | --- | --- |
 | STS2-RitsuLib | <https://github.com/BAKAOLC/STS2-RitsuLib> | 常见前置 MOD 兼容性排查。 | MIT |
-| BaseLib-StS2 | <https://github.com/Alchyr/BaseLib-StS2> | 常见前置 MOD 兼容性排查；`port-mod/tests/BaseLibExtendedSave.Tests` 动态加载用户本机提供的 DLL，验证卡牌修改数据的真实 JSON 持久化，不复制其源码或分发其二进制。 | MIT；不新增 APK 内置 BaseLib 依赖。 |
+| BaseLib-StS2 | <https://github.com/Alchyr/BaseLib-StS2> | 常见前置 MOD 兼容性排查；`port-mod/tests/BaseLibExtendedSave.Tests` 动态加载用户本机提供的 DLL，验证卡牌修改数据的真实 JSON 持久化，不复制其源码或分发其二进制。 | MIT；不新增 APK 或 Windows 启动器内置 BaseLib 依赖。 |
 | sts2-quickRestart | <https://github.com/freude916/sts2-quickRestart> | 快速重开 UI/流程兼容性参考。 | 未检测到标准 license；仅作本地参考。 |
 
 ## 发布前合规检查

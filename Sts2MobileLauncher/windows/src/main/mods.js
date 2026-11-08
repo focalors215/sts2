@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { extractZip, listFiles } = require('./ziputil');
+const { log } = require('./logger');
 
 const MOD_SOURCE = 'mods_directory';
 const pendingImports = new Map();
@@ -55,6 +56,8 @@ function parseManifest(root, file) {
 	try {
 		manifest = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
 	} catch (error) {
+		// MOD 目录里常有非 manifest 的 JSON（本地化、配置），解析失败不算错误。
+		log().d('mods', `跳过无法解析的 JSON: ${file}`, error);
 		return null;
 	}
 	if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
@@ -94,6 +97,9 @@ function scanManifests(root) {
 		try {
 			entries = fs.readdirSync(dir, { withFileTypes: true });
 		} catch (error) {
+			if (error.code !== 'ENOENT') {
+				log().w('mods', `读取 MOD 目录失败: ${dir}`, error);
+			}
 			return;
 		}
 		for (const entry of entries) {
@@ -379,6 +385,7 @@ async function prepareImport(stagingRoot, modsDir, source) {
 			overwrites,
 		};
 	} catch (error) {
+		log().e('mods', `准备导入 MOD 失败: ${source}`, error);
 		fs.rmSync(work, { recursive: true, force: true });
 		throw error;
 	}

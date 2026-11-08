@@ -27,7 +27,8 @@ PACK_ID="${COMPAT_MATRIX_PACK_ID:-sts2-android-compat}"
 DISPLAY_NAME="${COMPAT_MATRIX_DISPLAY_NAME:-STS2 Android Compatibility}"
 COMPAT_VERSION="${COMPAT_MATRIX_VERSION:-0.6.0-dev}"
 CHANNEL="${COMPAT_MATRIX_CHANNEL:-mixed}"
-TARGET_FILTER=""
+# Comma-separated target ids; empty builds every active target. --target overrides the env.
+TARGET_FILTER="${COMPAT_MATRIX_TARGETS:-}"
 INCLUDE_ARCHIVED="${BUILD_ARCHIVED_TARGETS:-0}"
 
 while [[ $# -gt 0 ]]; do
@@ -180,7 +181,7 @@ GIT_SUBJECT_MSBUILD="$(msbuild_escape_property "$GIT_SUBJECT")"
 
 for target_file in "${TARGET_FILES[@]}"; do
   target_id="$(json_value "$target_file" target_id)"
-  if [[ -n "$TARGET_FILTER" && "$target_id" != "$TARGET_FILTER" ]]; then
+  if [[ -n "$TARGET_FILTER" && ",${TARGET_FILTER// /}," != *",$target_id,"* ]]; then
     continue
   fi
   reference_flavor="$(json_value "$target_file" reference_flavor)"
@@ -233,6 +234,7 @@ entry = {
         "dll": f"variants/{target_id}/STS2Mobile.dll",
         "overlay_pck": f"variants/{target_id}/port_compat.pck",
     },
+    "capabilities": data.get("capabilities", []),
     "notes": data.get("notes", []),
 }
 print(json.dumps(entry, ensure_ascii=False, separators=(",", ":")))

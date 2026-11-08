@@ -28,7 +28,14 @@ if (args.Length == 5 && args[1] == "--verify")
     foreach (var p in json.RootElement.GetProperty("patches").EnumerateArray())
     {
         var type = woven.MainModule.GetType(p.GetProperty("targetType").GetString());
-        var method = type.Methods.Single(m => m.Name == p.GetProperty("targetMethod").GetString());
+        var candidates = type.Methods.Where(m => m.Name == p.GetProperty("targetMethod").GetString());
+        if (p.TryGetProperty("targetParams", out var parameters))
+        {
+            var names = parameters.EnumerateArray().Select(x => x.GetString()).ToList();
+            candidates = candidates.Where(m => m.Parameters.Count == names.Count &&
+                m.Parameters.Select((pr, i) => pr.ParameterType.Name == names[i] || pr.ParameterType.FullName == names[i]).All(x => x));
+        }
+        var method = candidates.Single();
         var hook = p.GetProperty("hookType").GetString() + "::" + p.GetProperty("hookMethod").GetString();
         if (!method.Body.Instructions.Any(i => i.Operand is MethodReference mr && mr.DeclaringType.FullName + "::" + mr.Name == hook))
             throw new Exception("Missing woven hook: " + hook);

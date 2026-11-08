@@ -1214,6 +1214,7 @@ public class LogFileViewerActivity extends AppCompatActivity {
 	}
 
 	private void showError(Exception exception) {
+		LauncherLog.e("ui", "操作失败（已提示用户）: " + getClass().getSimpleName(), exception);
 		Snackbar.make(contentContainer, getString(R.string.error_operation_failed) + ": " + buildErrorDetail(exception), Snackbar.LENGTH_LONG).show();
 	}
 

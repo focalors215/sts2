@@ -1550,6 +1550,7 @@ public class FileBrowserActivity extends AppCompatActivity {
 	}
 
 	private void showError(Exception exception) {
+		LauncherLog.e("ui", "操作失败（已提示用户）: " + getClass().getSimpleName(), exception);
 		String detail = exception.getMessage();
 		if (detail == null || detail.trim().isEmpty()) {
 			detail = exception.getClass().getSimpleName();

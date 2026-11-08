@@ -396,10 +396,10 @@ Java 不再把 `fullscreen_render_size` 转换为 Godot `--resolution`。根窗�
 启动器「联机小屋」与 iPad 启动器共用同一套在线房间：中心 frp 服务器上 20 个槽位，槽位 i 把房主本机 UDP 33771 映射到服务器 UDP `33771+i`，并把一张 JSON 房间卡发布在服务器 TCP `34771+i`；其他玩家扫描这些 TCP 端口列出房间，直接连服务器的 UDP 端口加入。只有房主运行 frp。
 
 - `android/frp-bridge/`：官方 frp v0.71.1 客户端库的 C API（与 `sts2-ios/src/FrpBridge` 相同）加 `jni_android.c`，由 `tools/android/build-frp-bridge.sh` 以 `GOOS=android GOARCH=arm64 -buildmode=c-shared` 编成 `libsts2frp.so`，Gradle 通过 `main.jniLibs.srcDirs += libs/frp` 打包。需要 `.env` 的 `GO_BIN`（可选 `GOPATH` / `GOCACHE` 指向已缓存 frp 模块的目录）与 NDK。
-- 服务器地址、端口、令牌由 `.env` 的 `STS2_FRP_SERVER` / `STS2_FRP_SERVER_PORT` / `STS2_FRP_TOKEN` 在构建时写入 `BuildConfig`，不入库；留空则联机小屋显示“未配置”。
+- 服务器地址、端口由 `.env` 的 `STS2_FRP_SERVER` / `STS2_FRP_SERVER_PORT` 在构建时写入 `BuildConfig`，不入库；留空则联机小屋显示“未配置”。**令牌不再编进 APK**（三端规范 §3.2）：房主第一次创建房间时在联机小屋输入令牌，保存在 `no_backup/frp/host-token.txt`，不进整机备份、日志和导出；frp 报令牌错误时自动清除并在下次创建时重新询问。加入房间不需要令牌。
 - frps 需要在 `bindPort` 上对外监听（TCP），`allowPorts` 包含 UDP 33771–33790 与 TCP 34771–34790，云服务器安全组同样放行。
-- Java：`FrpBridge`（JNI）、`OnlineRoomService`（扫描、占槽、写 `frpc.toml`、等待两个 proxy 都 running）、`NetworkPage`（昵称 / 创建房间 / 在线房间列表）。创建或加入后写 `<files>/launcher/pending-action.json` 再走正常 `launchGame()`；启动器全新打开时会清掉遗留指令。
-- 兼容层：`port-mod` 的 `RemoteRoomPatches` 在 `NMainMenu._Ready`（经 `LanMultiplayerBootstrapPatches`）读取并删除该文件，`host` 走原版多人菜单 `FastHost` / 继续存档 `StartHost`（由 LAN 补丁接到 ENet 33771），`join` 调原版 `NMainMenu.JoinGame(ENetClientConnectionInitializer)`。仅 `STS2_TARGET_1110` 实现，其他 target 提示不支持。
+- Java：`FrpBridge`（JNI）、`OnlineRoomService`（扫描、占槽、写 `frpc.toml`、等待两个 proxy 都 running；房间卡写 `platform: "android"`；`pending-action.json` 写 `v` / `type` / `created` / `online` / `host` / `port` / `nickname` / `playerId`，`playerId` 由 `OnlineIdentity` 读取或生成当前启动配置 `settings.save` 的 `lan_player_id`，与兼容层同一来源）、`NetworkPage`（昵称 / 房主令牌 / 创建房间 / 在线房间列表，列表显示房主平台；当前启动配置的兼容包关闭或 target 没有 `online_rooms` capability 时显示提示并阻止开房/加入）。frp 日志写到 `<files>/logs/frpc.log`。创建或加入后写 `<files>/launcher/pending-action.json` 再走正常 `launchGame()`；启动器全新打开时会清掉遗留指令。
+- 兼容层：`port-mod` 的 `RemoteRoomPatches` 在 `NMainMenu._Ready`（经 `LanMultiplayerBootstrapPatches`）读取并删除该文件，`host` 走原版多人菜单 `FastHost` / 继续存档 `StartHost`（由 LAN 补丁接到 ENet 33771），`join` 调原版 `NMainMenu.JoinGame(ENetClientConnectionInitializer)`。在 v0.107.1 与 v0.111.0 target 实现（两版 host/join API 相同，只有 `NetHostGameService` 构造参数不同），其他 target 弹出“不支持”并写日志。本机只配置了部分原版引用时，可用 `local.properties` 的 `compat.matrix_targets=v0.107.1,v0.111.0`（或环境变量 `COMPAT_MATRIX_TARGETS`）只构建这两个 target。
 
 ## 10. 构建直装版 APK
 

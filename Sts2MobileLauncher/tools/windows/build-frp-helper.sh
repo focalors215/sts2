@@ -11,6 +11,7 @@ source "$ROOT/tools/env/load-local-config.sh"
 sts2_init_env
 
 GO_BIN="$(sts2_config_path GO_BIN build.go_bin "$(command -v go || true)")"
+GO_BIN="${GO_BIN:-$(command -v go || true)}"
 sts2_require_executable "$GO_BIN" "Go toolchain (set GO_BIN in .env)"
 
 OUT="$ROOT/windows/resources/frp"

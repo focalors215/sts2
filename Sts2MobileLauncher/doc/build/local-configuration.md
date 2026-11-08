@@ -58,6 +58,7 @@ cp local.properties.example local.properties
 | `runtime.fmod_android_libs_dir` | AAR 同级的 `arm64/` | 当 native 库与 AAR 分开放置时指定目录；环境变量 `STS2_FMOD_ANDROID_LIBS_DIR` 优先，要求经过校验的 2.03.06 三件套。 |
 | `compat.default_reference_flavor` | `original-v0.111.0` | 当前 v0.111.0 public-beta fallback 的默认 compile gate；旧 v0.110.x / v0.109.x flavor 仍可显式选择。 |
 | `compat.pack_build_mode` | `matrix` | `matrix` 使用 `port-mod/targets/active/*/target.json` 从单 checkout 构建 schema 2 family 包；`legacy` 使用多分支/worktree 构建 schema 1 包，仅用于回退诊断。 |
+| `compat.matrix_targets` | 空 | 逗号分隔的 target id（如 `v0.107.1,v0.111.0`），只构建这些 matrix target；本机只配置了部分 original 引用时使用，等价于环境变量 `COMPAT_MATRIX_TARGETS`。留空构建全部 active target。 |
 | `compat.bundled_packs_config` | `tools/android/bundled-compat-packs.json` | 内置兼容包列表。 |
 | `compat.asset_dir` | `android/assets/compat_packs` | 内置兼容包输出到 APK assets 的目录；生成 zip 已 gitignore，不提交。 |
 | `compat.worktree_root` | `.agent/worktrees/compat-packs` | 多分支兼容包临时 worktree 根目录；位于 ignored `.agent/`。 |

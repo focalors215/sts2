@@ -73,6 +73,7 @@ public class LogViewerActivity extends AppCompatActivity {
 	private static final String SOURCE_CRASH = "crash";
 	private static final String SOURCE_HARMONY = "harmony";
 	private static final String SOURCE_CONSOLE = "console";
+	private static final String SOURCE_LAUNCHER = "launcher";
 	private static final int COLOR_BACKGROUND = 0xFF0F1117;
 	private static final int COLOR_SURFACE = 0xFF171A22;
 	private static final int COLOR_ON_SURFACE = 0xFFF0F0F8;
@@ -150,7 +151,7 @@ public class LogViewerActivity extends AppCompatActivity {
 		configureSearchAndFilters();
 		configureSelectionActions();
 		shareAllFab.setIcon(MaterialSymbols.drawable(this, "folder_zip", COLOR_ON_PRIMARY, 20));
-        shareAllFab.setOnClickListener(v -> shareLogEntries(new ArrayList<>(latestRuntimeEntries)));
+        shareAllFab.setOnClickListener(v -> shareLatestBundle());
 		adapter = new LogAdapter();
 		logsRecyclerView.setLayoutManager(new LinearLayoutManager(this));
 		logsRecyclerView.setAdapter(adapter);
@@ -286,6 +287,7 @@ public class LogViewerActivity extends AppCompatActivity {
         crashChip = addSourceChip(R.string.log_viewer_filter_crash, SOURCE_CRASH);
         addSourceChip(R.string.log_viewer_filter_harmony, SOURCE_HARMONY);
         addSourceChip(R.string.log_viewer_filter_console, SOURCE_CONSOLE);
+        addSourceChip(R.string.log_viewer_filter_launcher, SOURCE_LAUNCHER);
         allChip.setChecked(true);
 	}
 
@@ -497,7 +499,7 @@ public class LogViewerActivity extends AppCompatActivity {
 		}
 		rebuildListItems();
 		adapter.notifyDataSetChanged();
-        shareAllFab.setVisibility(selectionMode || latestRuntimeEntries.isEmpty() ? View.GONE : View.VISIBLE);
+        shareAllFab.setVisibility(selectionMode ? View.GONE : View.VISIBLE);
         updateEmptyListVisibility();
         updateFilterChipLabels();
 	}
@@ -605,6 +607,9 @@ public class LogViewerActivity extends AppCompatActivity {
         if (SOURCE_CONSOLE.equals(sourceType)) {
             return getString(R.string.log_viewer_source_console);
         }
+        if (SOURCE_LAUNCHER.equals(sourceType)) {
+            return getString(R.string.log_viewer_source_launcher);
+        }
         if (SOURCE_RUNTIME.equals(sourceType)) {
             return getString(R.string.log_viewer_source_runtime);
         }
@@ -622,6 +627,9 @@ public class LogViewerActivity extends AppCompatActivity {
         }
         if ("console_history.log".equals(lowerFileName) || lowerFileName.contains("console")) {
             return SOURCE_CONSOLE;
+        }
+        if (lowerFileName.startsWith("launcher.") || lowerFileName.startsWith("online-game.") || "frpc.log".equals(lowerFileName)) {
+            return SOURCE_LAUNCHER;
         }
         return SOURCE_RUNTIME;
     }
@@ -720,7 +728,7 @@ public class LogViewerActivity extends AppCompatActivity {
             selectionActionsBar.setAlpha(1f);
             selectionActionsBar.setTranslationY(0f);
         }
-        shareAllFab.setVisibility(visible || latestRuntimeEntries.isEmpty() ? View.GONE : View.VISIBLE);
+        shareAllFab.setVisibility(visible ? View.GONE : View.VISIBLE);
 	}
 
 	private List<LogEntry> getSelectedEntries() {
@@ -753,19 +761,53 @@ public class LogViewerActivity extends AppCompatActivity {
 		}
 	}
 
+	// "一键打包": latest game logs + launcher/online/frp logs + diagnostics.json (cross-platform-parity §5.5).
+	private void shareLatestBundle() {
+		List<LogEntry> runtimeEntries = new ArrayList<>(latestRuntimeEntries);
+		shareLogEntries(runtimeEntries, true);
+	}
+
+	private List<LogEntry> withLauncherSideLogs(List<LogEntry> entries) {
+		List<LogEntry> result = new ArrayList<>(entries);
+		Set<String> present = new HashSet<>();
+		for (LogEntry entry : entries) {
+			present.add(entry.file.getAbsolutePath());
+		}
+		File filesDir = getFilesDir();
+		for (File file : LogExportBundle.launcherSideLogs(filesDir)) {
+			if (!present.add(file.getAbsolutePath())) {
+				continue;
+			}
+			String relative = file.getAbsolutePath().substring(filesDir.getAbsolutePath().length()).replace('\\', '/');
+			while (relative.startsWith("/")) {
+				relative = relative.substring(1);
+			}
+			result.add(new LogEntry(file, relative, ROOT_INTERNAL_ARCHIVE + "/" + relative, getString(R.string.log_viewer_source_launcher), SOURCE_LAUNCHER,
+				getString(R.string.log_viewer_root_internal), file.lastModified(), file.length()));
+		}
+		return result;
+	}
+
 	private void shareLogEntries(List<LogEntry> entries) {
-		if (entries == null || entries.isEmpty()) {
+		shareLogEntries(entries, false);
+	}
+
+	private void shareLogEntries(List<LogEntry> entries, boolean fullBundle) {
+		if (entries == null || (entries.isEmpty() && !fullBundle)) {
 			return;
 		}
-		List<LogEntry> exportEntries = new ArrayList<>(entries);
+		List<LogEntry> selectedEntries = new ArrayList<>(entries);
 		new Thread(() -> {
 			try {
+				List<LogEntry> exportEntries = fullBundle ? withLauncherSideLogs(selectedEntries) : selectedEntries;
+				String diagnostics = fullBundle ? LogExportBundle.diagnosticsJson(this) : null;
 				File sharedDirectory = new File(getCacheDir(), "shared");
 				ensureDirectory(sharedDirectory);
-                File zipFile = File.createTempFile("sts2-logs-", ".zip", sharedDirectory);
+				File zipFile = new File(sharedDirectory, LogExportBundle.bundleFileName(new Date()));
 				try (OutputStream outputStream = new BufferedOutputStream(new FileOutputStream(zipFile))) {
-					writeLogsZip(outputStream, exportEntries);
+					writeLogsZip(outputStream, exportEntries, diagnostics);
 				}
+				LauncherLog.i(LauncherLog.TAG_APP, "导出日志包 " + zipFile.getName() + "，" + exportEntries.size() + " 个文件" + (fullBundle ? " + diagnostics.json" : ""));
 				Uri uri = FileProvider.getUriForFile(this, BuildConfig.APPLICATION_ID + ".fileprovider", zipFile);
 				runOnUiThread(() -> {
 					try {
@@ -806,8 +848,18 @@ public class LogViewerActivity extends AppCompatActivity {
 
 
 	private void writeLogsZip(OutputStream outputStream, List<LogEntry> entries) throws Exception {
+		writeLogsZip(outputStream, entries, null);
+	}
+
+	private void writeLogsZip(OutputStream outputStream, List<LogEntry> entries, String diagnosticsJson) throws Exception {
 		Set<String> usedNames = new HashSet<>();
 		try (ZipOutputStream zipOutputStream = new ZipOutputStream(outputStream)) {
+			if (diagnosticsJson != null) {
+				usedNames.add(LogExportBundle.DIAGNOSTICS_NAME);
+				zipOutputStream.putNextEntry(new ZipEntry(LogExportBundle.DIAGNOSTICS_NAME));
+				zipOutputStream.write(diagnosticsJson.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+				zipOutputStream.closeEntry();
+			}
 			for (LogEntry entry : entries) {
 				String entryName = makeUniqueZipEntryName(entry.archivePath, usedNames);
 				zipOutputStream.putNextEntry(new ZipEntry(entryName));
@@ -868,8 +920,7 @@ public class LogViewerActivity extends AppCompatActivity {
 	}
 
 	private String buildDefaultLogExportName() {
-		String timestamp = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date());
-		return "sts2-logs-" + timestamp + ".zip";
+		return LogExportBundle.bundleFileName(new Date());
 	}
 
 	private String formatDate(long timeMillis) {
@@ -924,6 +975,7 @@ public class LogViewerActivity extends AppCompatActivity {
 	}
 
 	private void showError(Exception exception) {
+		LauncherLog.e("ui", "操作失败（已提示用户）: " + getClass().getSimpleName(), exception);
 		String detail = exception.getMessage();
 		if (detail == null || detail.trim().isEmpty()) {
 			detail = exception.getClass().getSimpleName();
@@ -1057,6 +1109,9 @@ public class LogViewerActivity extends AppCompatActivity {
 		}
 		if (SOURCE_CONSOLE.equals(entry.sourceType)) {
 			return "history";
+		}
+		if (SOURCE_LAUNCHER.equals(entry.sourceType)) {
+			return "groups";
 		}
 		return "terminal";
 	}

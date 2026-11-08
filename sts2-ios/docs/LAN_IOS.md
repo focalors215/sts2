@@ -2,7 +2,25 @@
 
 此补丁把原多人菜单的「开房」和「加入好友」入口接到游戏自带 ENet/UDP 传输。它没有实现 Steam 好友、邀请、打洞或中继。保存启动器网络配置不代表已连接：只有开房成功或原 `JoinFlow` 握手完成才进入联机状态。
 
-## 操作
+## 从启动器自动开房 / 加入（推荐，三端相同）
+
+启动器「联机小屋」页的按钮会写一次性指令 `Documents/Launcher/pending-action.json`（规范 §3.3），然后进入游戏；游戏补丁 `RemoteRoomPatches` 在主菜单就绪约 0.6 s 后自动开房或加入，不需要在游戏里手动操作：
+
+```json
+{ "v": 1, "type": "host|join", "created": 1762650000, "online": true,
+  "host": "server.example.com", "port": 33774, "nickname": "喵喵零", "playerId": "1234567890123" }
+```
+
+- 「创建房间」（在线，`online: true`）：先输入 frp 令牌 → 扫描 20 个槽位、占用空槽并发布房间卡 → frp 确认两个代理都在运行 → 写 `type=host` → 进入游戏开房。有多人存档时按原版「继续」续局。
+- 在线房间列表：卡片显示「平台 · 游戏版本 · 创建时间 · 继续存档」，版本与本机不同时按钮为「版本不同」且禁用。加入写 `type=join`，地址为 frp 服务器、端口由槽位推出（不信任卡片里的 `port`）。
+- 「局域网直连」：房主点「局域网开房」（`online: false`，游戏会弹出 UDP 端口提示）；其他人填房主局域网 IP 与端口后点「直连加入」。页面显示本机局域网地址。
+- 指令读一次即删除；`created` 距今超过 600 s（或缺 `created` 的旧格式）丢弃并写日志；JSON 无效、未知 `type`/`v`、地址或端口非法时游戏内弹中文错误框并写日志。启动器每次打开会清理游戏没来得及消费的残留指令。
+
+### 房间卡 v1 与令牌
+
+房间卡 `{ v, name, host, version, continuing, created, slot, port, platform }`，iPad 写 `platform: "ios"`；读取方忽略未知字段，`platform` 规范化为 android/windows/ios/unknown。frp 令牌开房时向用户索要，保存在钥匙串（`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`，不进 iCloud/设备备份），不写 `config.json`、日志或导出包；旧版写在 `network.frp.token` 的令牌会自动迁到钥匙串并从文件删除。个人构建可以在 `STS2FrpDefaults.h` 预置令牌作为输入框默认值，公开构建的模板为空。加入房间不需要令牌。
+
+## 在游戏内手动操作
 
 1. 在启动器设置昵称、房主地址和 UDP 端口（默认 `33771`）。昵称、地址、端口可在加入页面修改；房主使用启动器配置的端口。
 2. 房主从游戏的原多人菜单开房；成功后进入原角色选择、每日或自定义房间。人数上限 4。
@@ -15,6 +33,17 @@
 ### 2026-10-27 真机验证
 
 iPad mini 7 与用户的 Android v0.111.0 客户端已完成同一 Wi-Fi 下开房、加入、双方出牌与回合同步，以及保存退出后重新开房续局。日志确认双方版本为 v0.111.0、ModelDb hash 均为 1568834832，原始版本与模型校验保留。最初的 UNKNOWN 来自 iOS 打包遗漏原始 `release_info.json`；补入与原游戏程序集匹配的原文件后解决，没有放宽握手。公网 UDP、VPN 和普通 Steam PC 互通仍未实测。
+
+## 身份与续局（规范 §3.4，2026-11-09 定稿）
+
+- ENet 房主 NetId 原版固定为 `1`，加入方 NetId = 本机 `playerId`（`ENetClientConnectionInitializer(playerId, host, port)`）。多人存档 `Players[].NetId` 里房主那位永远是 `1`。
+- `playerId` 合法范围 `[2, 2^63-1]`；缺失、0、1 或非法时重新生成并保存（启动器与游戏补丁同一规则）。
+- 续局判定（`CanonicalizePrefix`，所有读多人存档的地方）：存档含本机 `playerId` → 加入方；否则含 `1` → 房主；都不含 → 不调用原版（避免存档被改名为损坏文件），返回 ValidationFailed，提示「这个多人存档不属于当前玩家 ID。请恢复创建存档时的玩家 ID，存档已保留未改动。」并写 `[OnlineRoom] 续局身份不匹配: save=[…] local=…`。
+- 开房续局（`LoadedHostPrefix`）：只有身份是房主才允许；身份是加入方时拒绝并提示「这个多人存档里你是加入方，只能由原房主开房续局。请让原房主创建房间后加入。」存档不修改、不删除、不改名。
+- 加入续局照常用本机 `playerId`；房主端原版 `LoadRunLobby` 会拒绝不在存档里的 ID。
+- 本机平台 ID（`NullPlatformUtilStrategy.GetLocalPlayerId`）返回 `playerId`，但存档账号目录固定为 `default/1`；续局只依赖上面的判定。换设备续局需要把原设备的 `network.playerId` 一起迁移。
+
+以下为配置文件细节：
 
 ## 配置与身份
 
@@ -33,13 +62,13 @@ iPad mini 7 与用户的 Android v0.111.0 客户端已完成同一 Wi-Fi 下开�
 }
 ```
 
-`resourceMods` 在根层，与 native launcher 一致。读入后保留未知字段，使用同目录临时文件替换进行原子写入；旧补丁误放到 `network.resourceMods` 的数据会迁到根层。网络 ID 首次缺失时随机产生并保存，以后复用；复制配置到另一台设备时应给新设备生成不同 ID，避免同房重复身份。
+`resourceMods` 在根层，与 native launcher 一致。读入后保留未知字段，使用同目录临时文件替换进行原子写入；旧补丁误放到 `network.resourceMods` 的数据会迁到根层。网络 ID 首次缺失（或为 0/1）时随机产生并保存，以后复用；复制配置到另一台设备时应给新设备生成不同 ID，避免同房重复身份。
 
 昵称覆盖本机平台名称查询。原 Null 平台对远端名称仍使用其已有名称表/ID 显示；此补丁未新增昵称同步网络消息，不能承诺远端显示自定义昵称。
 
 随机网络 ID **只用于联机身份**。`UserDataPathProvider` 的 3 个路径入口把默认本地账号重新指定为 `1`，所以已有 `Documents/default/1` 单机、配置和多人存档仍在原位置；显式指定其他平台或其他账号的路径保持其参数语义。没有移动、复制或删除任何既有存档。
 
-多人续局要求稳定 ID 与存档内玩家 ID 匹配。若不匹配，补丁在原 canonicalization 之前返回明确的读取失败，并保留文件，防止游戏把身份不匹配的存档重命名为损坏文件。恢复创建该存档时的 `network.playerId` 后再启动（旧 Null 平台房主可能是 `"1"`）；**不要从多名玩家中猜选或重写 NetId**。备份配置时同时备份存档。
+多人续局按上一节「先 playerId 后 1」判定；都不匹配时补丁在原 canonicalization 之前返回明确的读取失败，并保留文件，防止游戏把身份不匹配的存档重命名为损坏文件。恢复创建该存档时的 `network.playerId` 后再启动；**不要从多名玩家中猜选或重写 NetId**。备份配置时同时备份存档。
 
 ## 实现边界
 
@@ -59,11 +88,25 @@ ipad-tools/toolchain/dotnet/dotnet sts2-ios/ios-export/.work/weaver-build/bin/ST
 ipad-tools/toolchain/dotnet/dotnet run --project sts2-ios/tools/LanApiProbe/LanApiProbe.csproj -- sts2-ios/game-refs/sts2.dll --verify sts2-ios/ios-export/.work/lan-hooks/STS2MobileIos.dll sts2-ios/ios-export/.work/lan-hooks/sts2.lan.woven.dll sts2-ios/src/STS2MobileIos/manifest.json
 ```
 
-当前整合清单应得到 49 个钩子（既有 37 + LAN 10 + 资源加载与握手 2），探针检查所有 manifest 目标都有织入调用和私有字段类型匹配。日志独立写 `lan-build.log`、`lan-weaver.log`、`lan-api-verify.log`，不覆盖 AOT 日志。
+当前整合清单应得到 50 个钩子（既有 37 + LAN 10 + 资源加载与握手 2 + 联机错误弹窗日志 1：`NErrorPopup.Create(NetErrorInfo)`，用 `targetParams` 消歧重载），探针检查所有 manifest 目标都有织入调用和私有字段类型匹配。
+
+补丁纯逻辑单测（pending-action 解析/过期、日志行格式与脱敏、续局身份判定）：
+
+```sh
+ipad-tools/toolchain/dotnet/dotnet run --project sts2-ios/tools/OnlineRoomTests/OnlineRoomTests.csproj
+```日志独立写 `lan-build.log`、`lan-weaver.log`、`lan-api-verify.log`，不覆盖 AOT 日志。
 
 离线通过不等于设备联通。当前已完成的真机项目见上方验收记录；仍需单独覆盖重名/重复 ID、各类版本与 MOD 不匹配、异常断线，以及 UDP 公网转发和 VPN。局域网验收结果不代表公网打洞或中继已实现。
 
-## 远程联机（frp 穿透）
+## 联机日志（规范 §5.2）
+
+游戏内联机组件统一用 `OnlineRoomLog`：前缀 `[OnlineRoom]` 写进游戏日志，同时按启动器同行格式（标签 `online`）追加到 `Documents/Launcher/online-game.log`（超过 2 MiB 转存 `online-game.1.log`），启动器「日志」页可直接查看。记录：读取/丢弃指令、开房端口与结果、加入地址、续局身份判定与不匹配、原版联机错误弹窗（织入 `NErrorPopup.Create(NetErrorInfo)`，记下 `NetError` 原文：握手失败、断线、房间满等）。写入前脱敏 token/password/apiKey/Bearer。
+
+iPad 的 `Launcher` 目录首字母大写（与 `pending-action.json` 同目录），对应规范里的 `user://launcher/online-game.log`。
+
+## 远程联机（frp 穿透，旧版手动入口）
+
+> 2026-11-09 起启动器使用上面的「在线房间」（20 槽位、房间卡、开房输入令牌）。下面是早期手动穿透方案的说明，保留作参考。
 
 不在同一网络时，房主用启动器内置的 frp 客户端把本机 ENet UDP 端口映射到一台 frp 服务器，朋友直接连服务器的远程端口。游戏协议、握手和版本校验均不变；只有房主需要 frp，加入方不需要。
 
@@ -80,4 +123,4 @@ ipad-tools/toolchain/dotnet/dotnet run --project sts2-ios/tools/LanApiProbe/LanA
 
 ### 2026-10-28 验证
 
-本机用同版本 frps（127.0.0.1）回环测试 `STS2FrpTunnel`：连接后 UDP 回显 5/5、同端口重启、错误令牌、端口不在 allowPorts 四项均符合预期；带 frp 的未签名 Xcode Release 构建通过。iPad 真机与公网服务器尚未验证：测试时 `123.56.157.107:7000` 直连返回“拒绝连接”，需先确认服务器上 frps 的监听端口与防火墙。
+本机用同版本 frps（127.0.0.1）回环测试 `STS2FrpTunnel`：连接后 UDP 回显 5/5、同端口重启、错误令牌、端口不在 allowPorts 四项均符合预期；带 frp 的未签名 Xcode Release 构建通过。iPad 真机与公网服务器尚未验证：测试时 个人 frp 服务器的 7000 端口 直连返回“拒绝连接”，需先确认服务器上 frps 的监听端口与防火墙。

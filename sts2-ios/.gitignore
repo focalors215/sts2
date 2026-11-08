@@ -39,3 +39,6 @@ save_backups/
 
 # 个人 frp 服务器默认值（含 token）
 ios-export/launcher/STS2FrpDefaults.h
+
+# 本地临时验证目录（工坊/MOD 门控试验等）
+.work/

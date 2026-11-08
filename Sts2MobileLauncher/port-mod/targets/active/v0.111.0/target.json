@@ -14,6 +14,9 @@
   "compile_constants": [
     "STS2_TARGET_1110"
   ],
+  "capabilities": [
+    "online_rooms"
+  ],
   "notes": [
     "Independent flattened target for the v0.111.0 public-beta managed API and multiplayer handshake update; it must not be merged into the v0.110.x variant.",
     "LAN host and client services receive PeerVersionInfo.LocalDefault() and then use the original v0.111 HandshakeManager, MessageTypes, and NetMessageBus implementation without an Android-owned wire protocol.",

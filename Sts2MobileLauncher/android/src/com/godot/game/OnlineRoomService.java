@@ -35,6 +35,8 @@ final class OnlineRoomService {
 	private static final String PREFS = "online_rooms";
 	private static final String KEY_NICKNAME = "nickname";
 	private static final String PENDING_ACTION = "launcher/pending-action.json";
+	static final String PLATFORM = "android";
+	private static final String TOKEN_FILE = "frp/host-token.txt";
 
 	interface Callback<T> {
 		void onResult(T result, String error);
@@ -46,14 +48,59 @@ final class OnlineRoomService {
 		final boolean continuing;
 		final int slot;
 		final int port;
+		/** "android", "windows", "ios" or "" when an older launcher did not write it. */
+		final String platform;
 
-		Room(String name, String version, boolean continuing, int slot) {
+		Room(String name, String version, boolean continuing, int slot, String platform) {
 			this.name = name;
 			this.version = version;
 			this.continuing = continuing;
 			this.slot = slot;
 			this.port = FIRST_GAME_PORT + slot;
+			this.platform = platform == null ? "" : platform;
 		}
+	}
+
+	/** Parses one scanned room card (§3.2); null when unusable. The port always comes from the slot. */
+	static Room parseRoomCard(JSONObject info, int slot, String unnamed) {
+		if (info == null || slot < 0 || slot >= SLOT_COUNT) {
+			return null;
+		}
+		String name = info.optString("name", "");
+		return new Room(name.isEmpty() ? unnamed : name, info.optString("version", "unknown"), info.optBoolean("continuing", false), slot, info.optString("platform", "").trim().toLowerCase(Locale.ROOT));
+	}
+
+	/** Room card v1 published by this launcher (§3.2). */
+	static JSONObject buildRoomCard(String roomName, String nickname, String version, boolean continuing, long createdSeconds, int slot) throws Exception {
+		JSONObject card = new JSONObject();
+		card.put("v", 1);
+		card.put("name", roomName);
+		card.put("host", nickname);
+		card.put("version", version);
+		card.put("continuing", continuing);
+		card.put("created", createdSeconds);
+		card.put("slot", slot);
+		card.put("port", FIRST_GAME_PORT + slot);
+		card.put("platform", PLATFORM);
+		return card;
+	}
+
+	/** pending-action.json v1 (§3.3); host/port are only written for joins. */
+	static JSONObject buildPendingAction(String type, String host, int port, String nickname, String playerId, long createdSeconds) throws Exception {
+		JSONObject action = new JSONObject();
+		action.put("v", 1);
+		action.put("type", type);
+		action.put("created", createdSeconds);
+		action.put("online", true);
+		if (host != null) {
+			action.put("host", host);
+			action.put("port", port);
+		}
+		action.put("nickname", nickname);
+		if (playerId != null) {
+			action.put("playerId", playerId);
+		}
+		return action;
 	}
 
 	private static OnlineRoomService instance;
@@ -81,6 +128,79 @@ final class OnlineRoomService {
 		return !TextUtils.isEmpty(BuildConfig.FRP_SERVER) && FrpBridge.isAvailable();
 	}
 
+	/**
+	 * Host token for the frp server (§3.2): never compiled into the APK, asked from the user when a
+	 * room is created and kept only in no-backup app storage (not in backups, logs or exports).
+	 */
+	String getHostToken() {
+		File file = new File(context.getNoBackupFilesDir(), TOKEN_FILE);
+		if (!file.isFile()) {
+			return "";
+		}
+		try {
+			String token = FileBrowserSupport.readTextFile(file).trim();
+			LauncherLog.registerSecret(token);
+			return token;
+		} catch (IOException exception) {
+			LauncherLog.w(LauncherLog.TAG_FRP, "读取房主令牌失败", exception);
+			return "";
+		}
+	}
+
+	void setHostToken(String token) throws IOException {
+		String trimmed = token == null ? "" : token.trim();
+		File file = new File(context.getNoBackupFilesDir(), TOKEN_FILE);
+		if (trimmed.isEmpty()) {
+			if (file.exists() && !file.delete()) {
+				throw new IOException("Unable to delete " + file);
+			}
+			LauncherLog.i(LauncherLog.TAG_FRP, "已清除房主令牌");
+			return;
+		}
+		LauncherLog.registerSecret(trimmed);
+		FileBrowserSupport.writeTextFile(file, trimmed);
+		LauncherLog.i(LauncherLog.TAG_FRP, "已保存房主令牌");
+	}
+
+	boolean hasHostToken() {
+		return !getHostToken().isEmpty();
+	}
+
+	/**
+	 * Null when the selected launch profile can use online rooms, otherwise a user-facing reason:
+	 * the compat pack must be enabled and its target must declare {@code online_rooms}.
+	 */
+	String onlineSupportProblem() {
+		try {
+			CompatPackManager compatPackManager = new CompatPackManager(context);
+			if (!compatPackManager.isCompatPackEnabled()) {
+				return context.getString(R.string.online_compat_disabled);
+			}
+			CompatPackManager.CompatPack pack = compatPackManager.getSelectedPackIgnoringEnabled();
+			if (pack == null) {
+				// No pack bound yet: the normal launch flow recommends one before starting the game.
+				return null;
+			}
+			if (!pack.hasCapability(CompatPackManager.CAPABILITY_ONLINE_ROOMS)) {
+				return context.getString(R.string.online_compat_unsupported_format, pack.selectionLabel(), pack.targetLabel());
+			}
+			return null;
+		} catch (Exception exception) {
+			LauncherLog.w(LauncherLog.TAG_ONLINE, "检查兼容包联机能力失败", exception);
+			return null;
+		}
+	}
+
+	/** Stable playerId of this device (§3.4), shared with the compat pack via settings.save. */
+	String playerId() {
+		try {
+			return OnlineIdentity.getOrCreatePlayerId(new ExtraSettingsRepository(context));
+		} catch (Exception exception) {
+			LauncherLog.w(LauncherLog.TAG_ONLINE, "读取联机玩家 ID 失败，交给游戏内生成", exception);
+			return null;
+		}
+	}
+
 	String getNickname() {
 		return prefs().getString(KEY_NICKNAME, context.getString(R.string.online_default_nickname));
 	}
@@ -102,7 +222,8 @@ final class OnlineRoomService {
 			File file = new File(new LaunchProfileManager(context).getSelectedGameDir(), PayloadManager.RELEASE_INFO_FILE_NAME);
 			String version = new JSONObject(FileBrowserSupport.readTextFile(file)).optString("version", "");
 			return version.isEmpty() ? "unknown" : version;
-		} catch (Exception ignored) {
+		} catch (Exception exception) {
+			LauncherLog.w(LauncherLog.TAG_ONLINE, "读取游戏版本失败", exception);
 			return "unknown";
 		}
 	}
@@ -135,12 +256,20 @@ final class OnlineRoomService {
 	/** Takes a free slot, publishes the room card and starts the tunnel. */
 	void createRoom(Callback<Room> callback) {
 		if (!isConfigured()) {
+			LauncherLog.w(LauncherLog.TAG_ONLINE, "创建房间失败: 未配置联机服务器或缺少 frp 组件");
 			callback.onResult(null, context.getString(R.string.online_not_configured));
+			return;
+		}
+		String token = getHostToken();
+		if (token.isEmpty()) {
+			LauncherLog.w(LauncherLog.TAG_ONLINE, "创建房间失败: 没有房主令牌");
+			callback.onResult(null, context.getString(R.string.online_token_required));
 			return;
 		}
 		String nickname = getNickname();
 		boolean continuing = hasMultiplayerSave();
 		String version = gameVersion();
+		LauncherLog.i(LauncherLog.TAG_ONLINE, "创建房间: version=" + version + " continuing=" + continuing + " server=" + server());
 		worker.execute(() -> {
 			boolean[] taken = new boolean[SLOT_COUNT];
 			for (Room room : scan()) {
@@ -153,34 +282,46 @@ final class OnlineRoomService {
 				}
 				tried++;
 				// A slot can be taken between scan and registration; fall through to the next one.
-				error = tryStartRoom(slot, nickname, version, continuing);
+				error = tryStartRoom(slot, nickname, version, continuing, token);
 				if (error == null) {
-					Room room = new Room(context.getString(R.string.online_room_name_format, nickname), version, continuing, slot);
+					LauncherLog.i(LauncherLog.TAG_ONLINE, "房间已发布: 槽位 " + slot + "，服务器 UDP " + (FIRST_GAME_PORT + slot) + "，房间卡 TCP " + (FIRST_CARD_PORT + slot));
+					Room room = new Room(context.getString(R.string.online_room_name_format, nickname), version, continuing, slot, PLATFORM);
 					main.post(() -> callback.onResult(room, null));
 					return;
 				}
+				LauncherLog.w(LauncherLog.TAG_FRP, "槽位 " + slot + " 启动失败: " + error);
 				if (!isTakenError(error)) {
 					break;
 				}
 			}
 			FrpBridge.roomStopServe();
+			LauncherLog.e(LauncherLog.TAG_ONLINE, "创建房间失败: " + error);
 			String message = error;
 			main.post(() -> callback.onResult(null, message));
 		});
 	}
 
 	/** One-shot action read (and deleted) by the compat pack's RemoteRoomPatches on the main menu. */
-	void writePendingAction(JSONObject action) throws IOException {
+	void writePendingAction(String type, String host, int port) throws Exception {
+		JSONObject action = buildPendingAction(type, host, port, getNickname(), playerId(), System.currentTimeMillis() / 1000L);
 		File file = new File(context.getFilesDir(), PENDING_ACTION);
 		File temp = new File(file.getPath() + ".tmp");
 		FileBrowserSupport.writeTextFile(temp, action.toString());
 		if (!temp.renameTo(file)) {
 			throw new IOException("Unable to write " + file);
 		}
+		LauncherLog.i(LauncherLog.TAG_ONLINE, "写入联机指令 type=" + type + (host == null ? "" : " target=" + host + ":" + port));
 	}
 
 	void clearPendingAction() {
-		new File(context.getFilesDir(), PENDING_ACTION).delete();
+		File file = new File(context.getFilesDir(), PENDING_ACTION);
+		if (file.isFile()) {
+			if (file.delete()) {
+				LauncherLog.i(LauncherLog.TAG_ONLINE, "清除上次遗留的联机指令");
+			} else {
+				LauncherLog.w(LauncherLog.TAG_ONLINE, "无法删除遗留的联机指令 " + file);
+			}
+		}
 	}
 
 	// Runs on the worker thread.
@@ -193,34 +334,27 @@ final class OnlineRoomService {
 			JSONArray found = new JSONArray(FrpBridge.roomScan(server(), FIRST_CARD_PORT, SLOT_COUNT, SCAN_TIMEOUT_MS));
 			for (int i = 0; i < found.length(); i++) {
 				JSONObject entry = found.optJSONObject(i);
-				JSONObject info = entry == null ? null : entry.optJSONObject("info");
-				int slot = entry == null ? -1 : entry.optInt("slot", -1);
-				if (info == null || slot < 0 || slot >= SLOT_COUNT) {
-					continue;
-				}
 				// The joinable port is derived from the slot, never trusted from the card.
-				String name = info.optString("name", "");
-				rooms.add(new Room(name.isEmpty() ? context.getString(R.string.online_unnamed_room) : name, info.optString("version", "unknown"), info.optBoolean("continuing", false), slot));
+				Room room = entry == null ? null : parseRoomCard(entry.optJSONObject("info"), entry.optInt("slot", -1), context.getString(R.string.online_unnamed_room));
+				if (room != null) {
+					rooms.add(room);
+				}
 			}
-		} catch (Exception ignored) {
+		} catch (Exception exception) {
+			LauncherLog.w(LauncherLog.TAG_ONLINE, "扫描房间失败", exception);
 		}
+		LauncherLog.d(LauncherLog.TAG_ONLINE, "扫描到 " + rooms.size() + " 个房间");
 		Collections.sort(rooms, (a, b) -> Integer.compare(a.slot, b.slot));
 		return rooms;
 	}
 
 	// Runs on the worker thread. Returns null on success, otherwise a user-facing error.
-	private String tryStartRoom(int slot, String nickname, String version, boolean continuing) {
-		JSONObject card = new JSONObject();
+	private String tryStartRoom(int slot, String nickname, String version, boolean continuing, String token) {
+		JSONObject card;
 		try {
-			card.put("v", 1);
-			card.put("name", context.getString(R.string.online_room_name_format, nickname));
-			card.put("host", nickname);
-			card.put("version", version);
-			card.put("continuing", continuing);
-			card.put("created", System.currentTimeMillis() / 1000L);
-			card.put("slot", slot);
-			card.put("port", FIRST_GAME_PORT + slot);
+			card = buildRoomCard(context.getString(R.string.online_room_name_format, nickname), nickname, version, continuing, System.currentTimeMillis() / 1000L, slot);
 		} catch (Exception exception) {
+			LauncherLog.e(LauncherLog.TAG_ONLINE, "生成房间卡失败", exception);
 			return exception.getMessage();
 		}
 		int cardPort = FrpBridge.roomServe(asciiJson(card.toString()));
@@ -233,20 +367,27 @@ final class OnlineRoomService {
 			+ "serverPort = " + BuildConfig.FRP_SERVER_PORT + "\n"
 			+ "loginFailExit = true\n"
 			+ "auth.method = \"token\"\n"
-			+ "auth.token = " + toml(BuildConfig.FRP_TOKEN) + "\n"
-			+ "log.to = " + toml(new File(context.getCacheDir(), "frpc.log").getAbsolutePath()) + "\n"
+			+ "auth.token = " + toml(token) + "\n"
+			+ "log.to = " + toml(frpLogFile(context).getAbsolutePath()) + "\n"
 			+ "log.level = \"info\"\nlog.maxDays = 1\n"
 			+ proxy(gameProxy, "udp", LOCAL_GAME_PORT, FIRST_GAME_PORT + slot)
 			+ proxy(cardProxy, "tcp", cardPort, FIRST_CARD_PORT + slot);
 		FrpBridge.stop();
 		File configFile = new File(new File(context.getNoBackupFilesDir(), "frp"), "frpc.toml");
 		try {
+			File logDirectory = frpLogFile(context).getParentFile();
+			if (logDirectory != null && !logDirectory.isDirectory() && !logDirectory.mkdirs()) {
+				LauncherLog.w(LauncherLog.TAG_FRP, "无法创建 frp 日志目录 " + logDirectory);
+			}
 			FileBrowserSupport.writeTextFile(configFile, config);
 		} catch (IOException exception) {
+			LauncherLog.e(LauncherLog.TAG_FRP, "写入 frpc.toml 失败", exception);
 			return exception.getMessage();
 		}
+		LauncherLog.i(LauncherLog.TAG_FRP, "启动 frp: 槽位 " + slot + "，" + gameProxy + " / " + cardProxy);
 		String startError = FrpBridge.start(configFile.getAbsolutePath());
 		if (startError != null) {
+			LauncherLog.e(LauncherLog.TAG_FRP, "frp 启动失败: " + startError);
 			return describe(context.getString(R.string.online_frp_config_invalid, startError));
 		}
 		long deadline = SystemClock.elapsedRealtime() + START_TIMEOUT_MS;
@@ -257,6 +398,7 @@ final class OnlineRoomService {
 				try {
 					status = new JSONObject(FrpBridge.status(name));
 				} catch (Exception exception) {
+					LauncherLog.d(LauncherLog.TAG_FRP, "frp 状态无法解析（视为错误）: " + exception);
 					status = new JSONObject();
 				}
 				String state = status.optString("state", "error");
@@ -267,6 +409,7 @@ final class OnlineRoomService {
 				if (!"starting".equals(state) || SystemClock.elapsedRealtime() > deadline) {
 					FrpBridge.stop();
 					String detail = status.optString("error", "");
+					LauncherLog.e(LauncherLog.TAG_FRP, "代理 " + name + " 未就绪: state=" + state + " error=" + detail);
 					return describe(detail.isEmpty() ? context.getString(R.string.online_frp_timeout) : detail);
 				}
 			}
@@ -275,6 +418,16 @@ final class OnlineRoomService {
 			}
 			SystemClock.sleep(300);
 		}
+	}
+
+	/** frp's own log (info, 1 day), listed by the log viewer and included in the log export (§5.3). */
+	static File frpLogFile(Context context) {
+		return new File(new File(context.getFilesDir(), "logs"), "frpc.log");
+	}
+
+	/** True when frp rejected the host token; the saved token is then cleared so the next create asks again. */
+	static boolean isTokenError(String message) {
+		return message != null && message.toLowerCase(Locale.ROOT).contains("token");
 	}
 
 	private static boolean isTakenError(String message) {

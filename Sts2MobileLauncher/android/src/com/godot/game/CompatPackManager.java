@@ -39,6 +39,7 @@ public final class CompatPackManager {
 	public static final String ENTRY_DLL = "STS2Mobile.dll";
 	public static final String ENTRY_OVERLAY_PCK = "port_compat.pck";
 	public static final String ARTIFACTS_DIR_NAME = "variants";
+	public static final String CAPABILITY_ONLINE_ROOMS = "online_rooms";
 	public static final String PACK_KIND_OFFLINE_BOOTSTRAP = "offline-bootstrap";
 	public static final String MATCH_MODE_OFFLINE_WILDCARD = "offline-wildcard";
 
@@ -1030,7 +1031,7 @@ public final class CompatPackManager {
 		return null;
 	}
 
-	private String sanitizeId(String value) {
+	private static String sanitizeId(String value) {
 		String sanitized = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
 		sanitized = sanitized.replaceAll("[^a-z0-9._-]+", "-");
 		while (sanitized.startsWith("-") || sanitized.startsWith(".")) {
@@ -1249,6 +1250,35 @@ public final class CompatPackManager {
 
 		public String selectionLabel() {
 			return TextUtils.isEmpty(targetId) ? packId : packId + "/" + targetId;
+		}
+
+		/** Capability declared by this target in the manifest (schema 2 targets[].capabilities, or top-level for schema 1). */
+		public boolean hasCapability(String capability) {
+			if (manifest == null || TextUtils.isEmpty(capability)) {
+				return false;
+			}
+			JSONArray targets = manifest.optJSONArray("targets");
+			if (targets != null && !TextUtils.isEmpty(targetId)) {
+				for (int i = 0; i < targets.length(); i++) {
+					JSONObject target = targets.optJSONObject(i);
+					if (target != null && targetId.equals(sanitizeId(target.optString("target_id", target.optString("id", ""))))) {
+						return arrayContains(target.optJSONArray("capabilities"), capability);
+					}
+				}
+			}
+			return arrayContains(manifest.optJSONArray("capabilities"), capability);
+		}
+
+		private static boolean arrayContains(JSONArray values, String expected) {
+			if (values == null) {
+				return false;
+			}
+			for (int i = 0; i < values.length(); i++) {
+				if (expected.equals(values.optString(i, ""))) {
+					return true;
+				}
+			}
+			return false;
 		}
 	}
 }

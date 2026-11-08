@@ -1,11 +1,15 @@
 'use strict';
 
 /*
- * 联机小屋：与 Android OnlineRoomService / iPad STS2RoomService 同一套在线房间。
- * 中心 frp 服务器上 SLOT_COUNT 个槽位，槽位 i 把房主本机 UDP 33771 映射到服务器 UDP
- * FIRST_GAME_PORT + i，并把一张 JSON 房间卡发布在服务器 TCP FIRST_CARD_PORT + i；
- * 其他玩家探测这些 TCP 端口列出房间，直接连服务器的 UDP 端口加入。只有房主运行 frp。
- * 游戏侧由联机组件 MOD（online-mod/STS2CottageOnline）读取 pending-action.json 开房 / 加入。
+ * 联机小屋：与 Android OnlineRoomService / iPad STS2RoomService 同一套在线房间（规范
+ * doc/architecture/cross-platform-parity.md §3）。中心 frp 服务器上 SLOT_COUNT 个槽位，槽位 i 把
+ * 房主本机 UDP 33771 映射到服务器 UDP FIRST_GAME_PORT + i，并把一张 JSON 房间卡发布在服务器
+ * TCP FIRST_CARD_PORT + i；其他玩家探测这些 TCP 端口列出房间，直接连服务器的 UDP 端口加入。
+ *
+ * 游戏内联机由启动器自带的「小屋联机组件」STS2CottageOnline（windows/online-mod/，按游戏版本
+ * 分别构建）实现：启动器按当前游戏版本把对应构建装到 <游戏目录>/mods/STS2CottageOnline/、在
+ * settings.save 启用它并禁用 Reforged / 旧 LAN MOD，再写一次性指令 user://launcher/pending-action.json；
+ * 游戏到主菜单后组件读取指令，用游戏自带 ENet 自动开房或加入（与 Android / iPad 同一协议）。
  */
 const fs = require('fs');
 const path = require('path');
@@ -13,6 +17,7 @@ const net = require('net');
 const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { log } = require('./logger');
 
 const LOCAL_GAME_PORT = 33771; // 游戏自带 ENet 开房端口，各端相同
 const FIRST_GAME_PORT = 33771; // 服务器 UDP，frps allowPorts
@@ -21,19 +26,55 @@ const SLOT_COUNT = 20;
 const SCAN_TIMEOUT_MS = 2500;
 const START_TIMEOUT_MS = 20000;
 const MAX_CARD_BYTES = 8192;
-const MOD_ID = 'STS2CottageOnline';
-const MOD_FILES = [`${MOD_ID}.dll`, `${MOD_ID}.json`];
+const COTTAGE_MOD_ID = 'STS2CottageOnline';
+const COTTAGE_MOD_FILES = [`${COTTAGE_MOD_ID}.json`, `${COTTAGE_MOD_ID}.dll`];
+// 组件按这些游戏版本的原版程序集分别构建（tools/windows/build-online-mod.sh）。
+const SUPPORTED_VERSIONS = ['v0.107.1', 'v0.111.0'];
+// 与小屋联机组件冲突的第三方 / 旧 LAN MOD：安装组件时在 settings.save 里禁用（不删文件）。
+const CONFLICTING_MOD_IDS = ['SlayTheSpire2.LAN.Multiplayer.Reforged', 'SlayTheSpire2.LAN.Multiplayer'];
+const PENDING_ACTION_VERSION = 1;
+const PENDING_ACTION_MAX_AGE_SECONDS = 600;
 
-/** 构建时由 scripts/prepare-assets.js 从 .env（STS2_FRP_SERVER / _PORT / _TOKEN）写入，不入库。 */
+function supportsVersion(version) {
+	return SUPPORTED_VERSIONS.includes(version);
+}
+
+/** 随启动器打包的组件构建：resources/online-mod/<游戏版本>/STS2CottageOnline/。 */
+function componentSourceDir(resourcesDir, version) {
+	return path.join(resourcesDir, String(version || ''), COTTAGE_MOD_ID);
+}
+
+function hasFiles(dir, names) {
+	return !!dir && names.every(name => fs.existsSync(path.join(dir, name)));
+}
+
+/** 这个游戏版本的组件构建是否随启动器打包了。 */
+function componentReady(resourcesDir, version) {
+	return supportsVersion(version) && hasFiles(componentSourceDir(resourcesDir, version), COTTAGE_MOD_FILES);
+}
+
+/** 打包了哪些版本的组件（界面提示用）。 */
+function bundledComponentVersions(resourcesDir) {
+	return SUPPORTED_VERSIONS.filter(version => componentReady(resourcesDir, version));
+}
+
+/** 游戏目录里是否已装好组件。 */
+function componentInstalled(modsDir) {
+	return !!modsDir && hasFiles(path.join(modsDir, COTTAGE_MOD_ID), COTTAGE_MOD_FILES);
+}
+
+/** 构建时由 scripts/prepare-assets.js 写入公开的 FRP 地址与端口；令牌不入包。 */
 function loadServerConfig(file) {
 	try {
 		const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
 		const port = Number.parseInt(raw.serverPort, 10);
 		if (typeof raw.server === 'string' && raw.server.trim()) {
-			return { server: raw.server.trim(), serverPort: Number.isFinite(port) ? port : 7000, token: String(raw.token || '') };
+			return { server: raw.server.trim(), serverPort: Number.isFinite(port) ? port : 7000 };
 		}
 	} catch (error) {
-		// 未配置。
+		if (error.code !== 'ENOENT') {
+			log().w('online', `读取联机服务器配置失败: ${file}`, error);
+		}
 	}
 	return null;
 }
@@ -82,12 +123,21 @@ function probeCard(host, port, timeoutMs) {
 			}
 		});
 		socket.on('end', () => finish(parse()));
-		socket.on('error', () => finish(null));
+		socket.on('error', error => {
+			// 空槽位没有监听，连接被拒绝是常态。
+			if (error.code !== 'ECONNREFUSED') {
+				log().d('online', `探测房间卡 ${host}:${port} 失败`, error);
+			}
+			finish(null);
+		});
 		function parse() {
 			try {
 				const info = JSON.parse(Buffer.concat(chunks).subarray(0, MAX_CARD_BYTES).toString('utf8'));
 				return info && typeof info === 'object' && !Array.isArray(info) ? info : null;
 			} catch (error) {
+				if (chunks.length) {
+					log().d('online', `房间卡 ${host}:${port} 不是 JSON`, error);
+				}
 				return null;
 			}
 		}
@@ -110,6 +160,7 @@ async function scanRooms(server, options = {}) {
 			name: typeof info.name === 'string' && info.name ? info.name.slice(0, 64) : '',
 			version: typeof info.version === 'string' && info.version ? info.version.slice(0, 32) : 'unknown',
 			continuing: info.continuing === true,
+			platform: ['android', 'windows', 'ios'].includes(info.platform) ? info.platform : '',
 			host: server,
 			port: FIRST_GAME_PORT + slot,
 		});
@@ -123,7 +174,7 @@ function serveCard(card) {
 	return new Promise((resolve, reject) => {
 		const server = net.createServer(socket => {
 			socket.setTimeout(5000, () => socket.destroy());
-			socket.on('error', () => {});
+			socket.on('error', error => log().d('online', '房间卡连接出错', error));
 			socket.end(data);
 		});
 		server.once('error', reject);
@@ -206,12 +257,15 @@ class RoomHost {
 			tried++;
 			// 扫描和注册之间槽位可能被别人占走，失败就试下一个。
 			try {
+				log().i('frp', `尝试槽位 ${slot}（UDP ${FIRST_GAME_PORT + slot} / TCP ${FIRST_CARD_PORT + slot}）`);
 				await this.start(slot, nickname, version, continuing);
 				this.room = { slot, port: FIRST_GAME_PORT + slot, name: `${nickname}的房间` };
 				this.setState('running');
+				log().i('online', `房间已开启: 槽位 ${slot}，服务器 ${this.serverConfig.server}:${FIRST_GAME_PORT + slot}`);
 				return this.room;
 			} catch (startError) {
 				error = startError.message;
+				log().w('frp', `槽位 ${slot} 开房失败`, startError);
 				this.stopProcesses();
 				if (!isTakenError(error)) {
 					break;
@@ -219,6 +273,7 @@ class RoomHost {
 			}
 		}
 		this.setState('idle');
+		log().e('online', `创建在线房间失败: ${error}`);
 		throw new Error(error);
 	}
 
@@ -256,8 +311,11 @@ class RoomHost {
 				}
 			};
 			const timer = setTimeout(() => settle(reject, new Error(describeFrpError('连接服务器超时'))), START_TIMEOUT_MS);
-			child.stdin.on('error', () => {});
-			child.once('error', error => settle(reject, error));
+			child.stdin.on('error', error => log().d('frp', 'frp 助手 stdin 已关闭', error));
+			child.once('error', error => {
+				log().e('frp', `无法启动 frp 助手: ${this.helperPath}`, error);
+				settle(reject, error);
+			});
 			child.stdout.on('data', chunk => {
 				buffer += chunk.toString('utf8');
 				let index;
@@ -268,8 +326,10 @@ class RoomHost {
 					try {
 						event = JSON.parse(line);
 					} catch (error) {
+						log().d('frp', `frp 助手输出: ${line}`);
 						continue;
 					}
+					log().i('frp', `frp 状态: ${event.state}${event.error ? ` (${event.error})` : ''}`);
 					if (event.state === 'running') {
 						if (settled && this.state === 'reconnecting') {
 							this.setState('running');
@@ -283,6 +343,7 @@ class RoomHost {
 				}
 			});
 			child.once('exit', code => {
+				log().i('frp', `frp 助手退出，代码 ${code}`);
 				settle(reject, new Error(describeFrpError(`frp 已退出（${code}）`)));
 				if (this.child === child && (this.state === 'running' || this.state === 'reconnecting')) {
 					// 运行中隧道断开（登录失效、被服务器踢下线等）：房间已不在列表里。
@@ -309,7 +370,7 @@ class RoomHost {
 			try {
 				child.stdin.end();
 			} catch (error) {
-				// 已退出。
+				log().d('frp', '关闭 frp 助手 stdin 失败（可能已退出）', error);
 			}
 			setTimeout(() => {
 				if (child.exitCode === null) {
@@ -343,51 +404,55 @@ function localIpv4Addresses() {
 	return out;
 }
 
-/** 当前账号是否有未完成的多人存档（profileN/saves/current_run_mp.save），用于房间卡“继续存档”。 */
+/**
+ * 当前账号是否有未完成的多人存档，用于房间卡“继续存档”。原版写 current_run_mp.save：
+ * 只装小屋联机组件时在 <账号>/profileN/saves/，同时启用了其他 MOD 时在 <账号>/modded/profileN/saves/。
+ */
 function hasMultiplayerSave(accountDir) {
 	if (!accountDir) {
 		return false;
 	}
-	let entries;
-	try {
-		entries = fs.readdirSync(accountDir, { withFileTypes: true });
-	} catch (error) {
-		return false;
-	}
-	return entries.some(entry => entry.isDirectory() && entry.name.startsWith('profile')
-		&& ['current_run_mp.save', 'current_run_mp.save.backup'].some(name => fs.existsSync(path.join(accountDir, entry.name, 'saves', name))));
-}
-
-/** 一次性指令，游戏主菜单就绪时由联机组件读取并删除（user://launcher/pending-action.json）。 */
-function pendingActionPath(saveRoot) {
-	return path.join(saveRoot, 'launcher', 'pending-action.json');
-}
-
-function writePendingAction(saveRoot, action) {
-	const file = pendingActionPath(saveRoot);
-	fs.mkdirSync(path.dirname(file), { recursive: true });
-	const temp = `${file}.${process.pid}.tmp`;
-	fs.writeFileSync(temp, JSON.stringify({ v: 1, created: Math.floor(Date.now() / 1000), ...action }), 'utf8');
-	fs.renameSync(temp, file);
-}
-
-function clearPendingAction(saveRoot) {
-	fs.rmSync(pendingActionPath(saveRoot), { force: true });
-}
-
-/** 把联机组件复制到 <游戏目录>/mods/STS2CottageOnline/（内容相同则不动）；返回是否有更新。 */
-function installOnlineMod(sourceDir, modsDir) {
-	for (const name of MOD_FILES) {
-		if (!fs.existsSync(path.join(sourceDir, name))) {
-			throw new Error('online_component_missing');
+	const names = ['current_run_mp.save', 'current_run_mp.save.backup'];
+	const search = (dir, depth) => {
+		let entries;
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		} catch (error) {
+			return false;
 		}
+		if (entries.some(entry => entry.isDirectory() && entry.name.startsWith('profile')
+			&& names.some(name => fs.existsSync(path.join(dir, entry.name, 'saves', name))))) {
+			return true;
+		}
+		if (depth >= 2) {
+			return false;
+		}
+		return entries.some(entry => entry.isDirectory() && !entry.name.startsWith('.')
+			&& search(path.join(dir, entry.name), depth + 1));
+	};
+	return search(accountDir, 0);
+}
+
+/**
+ * 把这个游戏版本的组件构建复制到 <modsDir>/STS2CottageOnline/（内容相同则不动），并删掉组件
+ * 目录里不属于这次构建的旧文件（只限组件自己的目录）。返回是否有变化。
+ */
+function installComponent(resourcesDir, version, modsDir) {
+	const sourceDir = componentSourceDir(resourcesDir, version);
+	if (!componentReady(resourcesDir, version)) {
+		throw new Error(supportsVersion(version) ? 'online_component_missing' : 'online_unsupported_version');
 	}
-	const target = path.join(modsDir, MOD_ID);
+	const target = path.join(modsDir, COTTAGE_MOD_ID);
 	fs.mkdirSync(target, { recursive: true });
 	let changed = false;
-	for (const name of MOD_FILES) {
-		const from = path.join(sourceDir, name);
-		const to = path.join(target, name);
+	const incomingNames = new Set();
+	for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+		if (!entry.isFile()) {
+			continue;
+		}
+		incomingNames.add(entry.name.toLowerCase());
+		const from = path.join(sourceDir, entry.name);
+		const to = path.join(target, entry.name);
 		const incoming = fs.readFileSync(from);
 		if (fs.existsSync(to) && fs.readFileSync(to).equals(incoming)) {
 			continue;
@@ -397,7 +462,139 @@ function installOnlineMod(sourceDir, modsDir) {
 		fs.renameSync(temp, to);
 		changed = true;
 	}
+	for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
+		if (entry.isFile() && !incomingNames.has(entry.name.toLowerCase()) && /\.(dll|json|pdb|pck)$/i.test(entry.name)) {
+			fs.rmSync(path.join(target, entry.name), { force: true });
+			changed = true;
+		}
+	}
 	return changed;
+}
+
+/** pending-action.json 的位置：游戏 user://（Windows 为存档根目录）下的 launcher/。 */
+function pendingActionPath(saveRoot) {
+	return path.join(saveRoot, 'launcher', 'pending-action.json');
+}
+
+/** 组一条 v1 指令（规范 §3.3）。type=host 时 host/port 不写。 */
+function buildPendingAction({ type, online: isOnline, host, port, nickname, playerId, now = Date.now() }) {
+	if (type !== 'host' && type !== 'join') {
+		throw new Error(`unknown pending action type: ${type}`);
+	}
+	if (!isValidPlayerId(playerId)) {
+		throw new Error('invalid player id');
+	}
+	const action = { v: PENDING_ACTION_VERSION, type, created: Math.floor(now / 1000), online: !!isOnline };
+	if (type === 'join') {
+		const cleanHost = String(host || '').trim().replace(/^\[(.*)\]$/, '$1');
+		const cleanPort = Number.parseInt(port, 10);
+		if (!cleanHost || !(cleanPort > 0 && cleanPort <= 65535)) {
+			throw new Error('online_bad_address');
+		}
+		action.host = cleanHost;
+		action.port = cleanPort;
+	}
+	action.nickname = normalizeNickname(nickname, '玩家');
+	action.playerId = playerId;
+	return action;
+}
+
+/** 原子写入指令文件。 */
+function writePendingAction(saveRoot, action) {
+	const file = pendingActionPath(saveRoot);
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	const temp = `${file}.${process.pid}.tmp`;
+	fs.writeFileSync(temp, JSON.stringify(action), 'utf8');
+	fs.renameSync(temp, file);
+	return file;
+}
+
+/**
+ * 读取并校验一条指令（与游戏内组件的判定相同）：返回 { action } 或 { error }。
+ * 过期（created 距今超过 600 s）、解析失败、未知 type、地址非法都算错误。
+ */
+function parsePendingAction(text, now = Date.now()) {
+	let action;
+	try {
+		action = JSON.parse(text);
+	} catch (error) {
+		return { error: 'parse' };
+	}
+	if (!action || typeof action !== 'object' || Array.isArray(action)) {
+		return { error: 'parse' };
+	}
+	const created = Number(action.created) || 0;
+	if (Math.abs(Math.floor(now / 1000) - created) > PENDING_ACTION_MAX_AGE_SECONDS) {
+		return { error: 'stale', action };
+	}
+	if (action.type !== 'host' && action.type !== 'join') {
+		return { error: 'type', action };
+	}
+	if (action.type === 'join') {
+		const port = Number(action.port);
+		if (typeof action.host !== 'string' || !action.host.trim() || !Number.isInteger(port) || port <= 0 || port > 65535) {
+			return { error: 'address', action };
+		}
+		if (!isValidPlayerId(String(action.playerId || ''))) {
+			return { error: 'player_id', action };
+		}
+	}
+	return { action };
+}
+
+/** 启动器打开时清掉上次遗留的指令（同 Android GameSettingsActivity），返回被清掉的内容。 */
+function clearPendingAction(saveRoot) {
+	const file = pendingActionPath(saveRoot);
+	if (!fs.existsSync(file)) {
+		return null;
+	}
+	let text = '';
+	try {
+		text = fs.readFileSync(file, 'utf8');
+	} catch (error) {
+		log().w('online', `读取遗留联机指令失败: ${file}`, error);
+	}
+	fs.rmSync(file, { force: true });
+	return text;
+}
+
+/**
+ * 在 settings.save（已解析的 JSON）里启用组件、禁用冲突 MOD。mods 为 mods.js 的 MOD 视图列表。
+ * MOD 总开关原本关着时打开它，并把其他已启用的 MOD 设为禁用，避免玩法 MOD 随之加载导致双方不同步。
+ * 返回 { disabledConflicts, disabledOthers, enabledOthers }（名称列表）。
+ */
+function enableComponentInSettings(json, modsApi, installedMods) {
+	const modSettings = modsApi.modSettingsOf(json);
+	const nameOf = id => {
+		const mod = installedMods.find(m => m.id === id);
+		return mod ? (mod.name || mod.id) : id;
+	};
+	const disabledConflicts = [];
+	const disabledOthers = [];
+	for (const id of CONFLICTING_MOD_IDS) {
+		const mod = installedMods.find(m => m.id === id);
+		const listed = modSettings.mod_list.some(item => item && item.id === id && item.is_enabled !== false);
+		if ((mod && mod.enabled) || listed) {
+			disabledConflicts.push(nameOf(id));
+		}
+		if (mod || listed) {
+			modsApi.setDisabled(json, id, true);
+		}
+	}
+	if (!modSettings.mods_enabled) {
+		modSettings.mods_enabled = true;
+		for (const mod of installedMods) {
+			if (mod.id !== COTTAGE_MOD_ID && !CONFLICTING_MOD_IDS.includes(mod.id) && mod.enabled) {
+				modsApi.setDisabled(json, mod.id, true);
+				disabledOthers.push(mod.name || mod.id);
+			}
+		}
+	}
+	modsApi.setDisabled(json, COTTAGE_MOD_ID, false);
+	const enabledOthers = installedMods
+		.filter(mod => mod.id !== COTTAGE_MOD_ID && !CONFLICTING_MOD_IDS.includes(mod.id) && mod.enabled && !disabledOthers.includes(mod.name || mod.id))
+		.map(mod => mod.name || mod.id);
+	return { disabledConflicts, disabledOthers, enabledOthers };
 }
 
 module.exports = {
@@ -405,7 +602,23 @@ module.exports = {
 	FIRST_GAME_PORT,
 	FIRST_CARD_PORT,
 	SLOT_COUNT,
-	MOD_ID,
+	COTTAGE_MOD_ID,
+	COTTAGE_MOD_FILES,
+	CONFLICTING_MOD_IDS,
+	SUPPORTED_VERSIONS,
+	PENDING_ACTION_MAX_AGE_SECONDS,
+	supportsVersion,
+	componentSourceDir,
+	componentReady,
+	bundledComponentVersions,
+	componentInstalled,
+	installComponent,
+	enableComponentInSettings,
+	pendingActionPath,
+	buildPendingAction,
+	writePendingAction,
+	parsePendingAction,
+	clearPendingAction,
 	loadServerConfig,
 	normalizeNickname,
 	newPlayerId,
@@ -417,8 +630,4 @@ module.exports = {
 	RoomHost,
 	localIpv4Addresses,
 	hasMultiplayerSave,
-	pendingActionPath,
-	writePendingAction,
-	clearPendingAction,
-	installOnlineMod,
 };

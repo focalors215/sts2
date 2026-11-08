@@ -249,6 +249,7 @@ public class WebDavCloudActivity extends AppCompatActivity {
 					showMessage(result);
 				});
 			} catch (Exception exception) {
+				LauncherLog.e(LauncherLog.TAG_CLOUD, "WebDAV 操作失败", exception);
 				WebDavSyncManager.CloudConflictException conflict = findCloudConflict(exception);
 				runOnUiThread(() -> {
 					busy = false;
@@ -314,6 +315,7 @@ public class WebDavCloudActivity extends AppCompatActivity {
 					showMessage(result);
 				});
 			} catch (Exception exception) {
+				LauncherLog.e(LauncherLog.TAG_CLOUD, "WebDAV 操作失败", exception);
 				runOnUiThread(() -> {
 					busy = false;
 					dismissOperationDialog();

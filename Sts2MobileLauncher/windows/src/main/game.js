@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
 const { parseVdf, getKey } = require('./vdf');
+const { log } = require('./logger');
 
 const STEAM_APP_ID = '2868840';
 const GAME_EXE = 'SlayTheSpire2.exe';
@@ -32,6 +33,8 @@ function readRegistrySteamPath() {
 	return Promise.all(queries.map(([key, value]) => new Promise(resolve => {
 		execFile('reg', ['query', key, '/v', value], { windowsHide: true }, (error, stdout) => {
 			if (error) {
+				// 该注册表项不存在是常态（只装了一种 Steam）。
+				log().d('launch', `读取注册表 ${key}\\${value} 失败`, error);
 				resolve(null);
 				return;
 			}
@@ -66,8 +69,24 @@ function libraryFolders(steamRoot) {
 		}
 	} catch (error) {
 		// 没有 libraryfolders.vdf 时只看 Steam 根目录。
+		log().d('launch', `读取 ${steamRoot} 的 libraryfolders.vdf 失败`, error);
 	}
 	return folders;
+}
+
+/** 本机所有 Steam 库目录（去重）。 */
+async function steamLibraries() {
+	const roots = [...await readRegistrySteamPath(), ...defaultSteamRoots()];
+	const seen = new Map();
+	for (const root of roots) {
+		for (const library of libraryFolders(root)) {
+			const key = process.platform === 'win32' ? library.toLowerCase() : library;
+			if (!seen.has(key) && fs.existsSync(library)) {
+				seen.set(key, library);
+			}
+		}
+	}
+	return [...seen.values()];
 }
 
 /** 找出本机所有 Steam 库里安装的 STS2。 */
@@ -93,6 +112,7 @@ async function detectSteamInstalls() {
 				branch = getKey(getKey(manifest, 'UserConfig'), 'BetaKey') || getKey(getKey(manifest, 'MountedConfig'), 'BetaKey') || '';
 			} catch (error) {
 				// 没有 appmanifest 也尝试默认目录名。
+				log().d('launch', `读取 ${manifestFile} 失败`, error);
 			}
 			const gameDir = path.join(library, 'steamapps', 'common', installDir);
 			if (fs.existsSync(path.join(gameDir, GAME_EXE)) || fs.existsSync(path.join(gameDir, 'SlayTheSpire2.pck'))) {
@@ -137,13 +157,17 @@ async function inspectGameDir(gameDir) {
 		result.commit = String(info.commit || '');
 		result.branch = String(info.branch || '');
 	} catch (error) {
-		// 缺 release_info 已记录在 missing。
+		// 缺 release_info 已记录在 missing；文件存在但解析失败时记日志。
+		if (error.code !== 'ENOENT') {
+			log().w('launch', `release_info.json 解析失败: ${gameDir}`, error);
+		}
 	}
 	const dll = path.join(gameDir, DATA_DIR, 'sts2.dll');
 	if (fs.existsSync(dll)) {
 		try {
 			result.dllSha256 = await cachedSha(dll);
 		} catch (error) {
+			log().w('launch', `计算 sts2.dll SHA-256 失败: ${dll}`, error);
 			result.dllSha256 = '';
 		}
 	}
@@ -218,6 +242,7 @@ module.exports = {
 	GAME_EXE,
 	REQUIRED_FILES,
 	detectSteamInstalls,
+	steamLibraries,
 	inspectGameDir,
 	buildLaunchArgs,
 	splitArgs,

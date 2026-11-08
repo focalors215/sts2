@@ -107,6 +107,26 @@ public class GameSettingsActivity extends AppCompatActivity implements ExtraSett
 			showMainShell();
 			maybeLaunchGameFromLauncherIntent(savedInstanceState);
 		}
+		if (savedInstanceState == null) {
+			showPreviousLaunchFailureIfAny();
+		}
+	}
+
+	// StartupHealthTracker marks GodotApp.onCreate and clears once the Godot main loop runs, so a
+	// leftover marker means the last game start died before reaching the engine (spec §5.4).
+	private void showPreviousLaunchFailureIfAny() {
+		String detail = StartupHealthTracker.describePendingLaunch(this);
+		String warning = StartupHealthTracker.consumePendingLaunchWarning(this);
+		if (warning == null) {
+			return;
+		}
+		LauncherLog.w(LauncherLog.TAG_LAUNCH, "上次游戏未完成启动（异常退出）: " + detail);
+		new MaterialAlertDialogBuilder(this)
+			.setTitle(R.string.previous_launch_failed_title)
+			.setMessage(warning)
+			.setPositiveButton(R.string.previous_launch_failed_view_logs, (dialog, which) -> startActivity(new Intent(this, LogViewerActivity.class)))
+			.setNegativeButton(android.R.string.cancel, null)
+			.show();
 	}
 
 	@Override
@@ -2164,22 +2184,37 @@ public class GameSettingsActivity extends AppCompatActivity implements ExtraSett
 		showMessage(getString(R.string.status_busy_prepare_launch));
 		new Thread(() -> {
 			try {
+				LauncherLog.i(LauncherLog.TAG_LAUNCH, "准备启动游戏: " + describeLaunchTarget());
 				createPreLaunchLocalSaveSnapshotIfNeeded();
 				new GameLaunchPreparationManager(this).prepareForLaunch();
 				runOnUiThread(() -> {
 					busy = false;
+					LauncherLog.i(LauncherLog.TAG_LAUNCH, "启动准备完成，进入游戏");
 					Intent intent = GodotApp.createLaunchIntent(this, true);
 					intent.putExtra("launch_prepared", true);
 					startActivity(intent);
 					finish();
 				});
 			} catch (Exception exception) {
+				LauncherLog.e(LauncherLog.TAG_LAUNCH, "启动准备失败", exception);
 				runOnUiThread(() -> {
 					busy = false;
 					showError(exception);
 				});
 			}
 		}, "sts2-launch-prepare").start();
+	}
+
+	private String describeLaunchTarget() {
+		try {
+			LaunchProfileManager.LaunchProfile profile = launchProfileManager.getSelectedProfile();
+			CompatPackManager.CompatPack pack = compatPackManager.getSelectedPack();
+			return "profile=" + (profile == null ? "-" : launchProfileManager.getSelectedProfileId())
+				+ " game=" + OnlineRoomService.get(this).gameVersion()
+				+ " compat=" + (pack == null ? (compatPackManager.isCompatPackEnabled() ? "-" : "off") : pack.selectionLabel() + "@" + pack.compatVersion);
+		} catch (Exception exception) {
+			return "unknown (" + exception + ")";
+		}
 	}
 
 	private void installBundledCompatPacksInBackground(boolean showResult) {
@@ -2200,7 +2235,7 @@ public class GameSettingsActivity extends AppCompatActivity implements ExtraSett
 					runPendingCompatRecommendationLaunch();
 				});
 			} catch (Exception exception) {
-				Log.w(TAG, "Unable to install bundled compatibility packs.", exception);
+				LauncherLog.w(LauncherLog.TAG_LAUNCH, "安装内置兼容包失败", exception);
 				runOnUiThread(() -> {
 					bundledCompatPackBootstrapFinished = true;
 					runPendingLauncherDirectLaunch();
@@ -2499,6 +2534,7 @@ public class GameSettingsActivity extends AppCompatActivity implements ExtraSett
 
 	@Override
 	public void showError(Exception exception) {
+		LauncherLog.e("ui", "操作失败（已提示用户）: " + getClass().getSimpleName(), exception);
 		String message = getString(R.string.error_operation_failed) + ": " + (exception.getMessage() == null ? exception.toString() : exception.getMessage());
 		showSnackbar(message, Snackbar.LENGTH_LONG);
 		refreshCurrentScreen();

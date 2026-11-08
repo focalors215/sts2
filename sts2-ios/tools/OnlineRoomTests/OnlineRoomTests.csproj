@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 离线单测：pending-action 解析/过期（规范 §3.3）与 online-game.log 行格式/脱敏（§5.2）。
+       只编译补丁里的纯逻辑文件；运行不需要游戏或设备。 -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/STS2MobileIos/Patches/PendingAction.cs" />
+    <Compile Include="../../src/STS2MobileIos/Patches/OnlineRoomLog.cs" />
+    <Compile Include="../../src/STS2MobileIos/Patches/MultiplayerIdentity.cs" />
+    <Compile Include="../../src/STS2MobileIos/PatchHelper.cs" />
+    <Reference Include="GodotSharp"><HintPath>../../game-refs/GodotSharp.dll</HintPath></Reference>
+    <Reference Include="sts2"><HintPath>../../game-refs/sts2.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

@@ -909,6 +909,7 @@ public class NexusModsStoreActivity extends AppCompatActivity {
 	}
 
 	private void showError(Exception exception) {
+		LauncherLog.e("nexus", "操作失败（已提示用户）: " + getClass().getSimpleName(), exception);
 		String detail = exception.getMessage();
 		if (TextUtils.isEmpty(detail)) {
 			detail = exception.getClass().getSimpleName();

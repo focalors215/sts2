@@ -45,7 +45,6 @@ public static class LanMultiplayerPatches
     private const int DefaultMaxPlayers = 4;
     private const int SteamMaxPlayers = 250;
     private const string LanPlayerIdSettingKey = "lan_player_id";
-    private const string LanMultiplayerSavePlayerIdSettingKey = "lan_multiplayer_save_player_id";
 
     private static readonly Dictionary<PlatformType, Dictionary<ulong, string>> PlayerNameOverrides = new();
 
@@ -74,6 +73,8 @@ public static class LanMultiplayerPatches
         PatchHelper.Patch(harmony, typeof(NJoinFriendScreen), "OnSubmenuClosed", postfix: PatchHelper.Method(typeof(LanMultiplayerPatches), nameof(JoinFriendClosedPostfix)));
         PatchHelper.Patch(harmony, typeof(NMultiplayerHostSubmenu), "StartHostAsync", prefix: PatchHelper.Method(typeof(LanMultiplayerPatches), nameof(HostSubmenuStartHostAsyncPrefix)));
         PatchHelper.Patch(harmony, typeof(NMultiplayerSubmenu), "StartHostAsync", prefix: PatchHelper.Method(typeof(LanMultiplayerPatches), nameof(MultiplayerSubmenuStartHostAsyncPrefix)));
+
+        RemoteRoomPatches.Apply(harmony);
 
         Applied = true;
         PatchHelper.Log("LAN multiplayer compatibility patches applied; using the game-native message protocol.");
@@ -141,35 +142,49 @@ public static class LanMultiplayerPatches
         return true;
     }
 
-    public static void LoadAndCanonicalizeMultiplayerRunSavePrefix(object __instance, ref ulong __0)
+    /// <summary>Last §3.4 identity failure while loading the multiplayer save; shown by the online room flow.</summary>
+    public static string LastSaveIdentityError { get; private set; }
+
+    // §3.4 (doc/architecture/cross-platform-parity.md): ENet hosts are always NetId 1 and joiners use
+    // the stable playerId, so the local player in a multiplayer save is the stable ID when present
+    // (this device joined) and otherwise 1 (this device hosted). Anything else is an identity mismatch:
+    // the original would throw and rename the save as broken, so it is rejected before that path.
+#if STS2_TARGET_1071 || STS2_TARGET_1110
+    public static bool LoadAndCanonicalizeMultiplayerRunSavePrefix(object __instance, ref ulong __0, ref ReadSaveResult<SerializableRun> __result)
+#else
+    public static bool LoadAndCanonicalizeMultiplayerRunSavePrefix(object __instance, ref ulong __0)
+#endif
     {
+        LastSaveIdentityError = null;
         try
         {
-            var localPlayerId = __0;
             var saveData = TryLoadRawMultiplayerSave(__instance);
             var savePlayerIds = GetSavePlayerIds(saveData).Distinct().ToList();
             if (savePlayerIds.Count == 0)
-                return;
-            if (savePlayerIds.Contains(localPlayerId))
+                return true;
+            var stableId = GetOrCreateLocalPeerId();
+            var role = OnlineRoomProtocol.ResolveSaveRole(savePlayerIds, stableId, out var localNetId);
+            if (role != OnlineRoomProtocol.SaveRole.Mismatch)
             {
-                RememberMultiplayerSavePlayerId(localPlayerId);
-                return;
+                if (__0 != localNetId)
+                    PatchHelper.Log($"LAN multiplayer save identity: role={role}, local NetId {localNetId} (platform ID {__0}).");
+                __0 = localNetId;
+                return true;
             }
 
-            if (TryResolveMultiplayerSavePlayerId(savePlayerIds, out var savePlayerId))
-            {
-                PatchHelper.Log($"LAN multiplayer save canonicalization uses saved player ID {savePlayerId} instead of current platform ID {localPlayerId}.");
-                __0 = savePlayerId;
-                RememberMultiplayerSavePlayerId(savePlayerId);
-            }
-            else
-            {
-                PatchHelper.Log($"LAN multiplayer save canonicalization kept current platform ID {localPlayerId}; save has multiple unmatched player IDs: {string.Join(",", savePlayerIds)}");
-            }
+            LastSaveIdentityError = OnlineRoomProtocol.SaveMismatchMessage;
+            OnlineRoomLog.Error($"续局身份不匹配: save={string.Join(",", savePlayerIds)} local={stableId}");
+#if STS2_TARGET_1071 || STS2_TARGET_1110
+            __result = new ReadSaveResult<SerializableRun>(ReadSaveStatus.ValidationFailed, OnlineRoomProtocol.SaveMismatchMessage);
+            return false;
+#else
+            return true;
+#endif
         }
         catch (Exception exception)
         {
             PatchHelper.Log($"LAN multiplayer save ID compatibility patch failed: {exception}");
+            return true;
         }
     }
 
@@ -247,6 +262,18 @@ public static class LanMultiplayerPatches
     {
         if (SteamInitializer.Initialized && !CommandLineHelper.HasArg("fastmp"))
             return true;
+        // §3.4: only the device that hosted the saved run (NetId 1) may host it again.
+        var stableId = GetOrCreateLocalPeerId();
+        var savePlayerIds = run?.Players?.Select(player => player.NetId).ToList() ?? new List<ulong>();
+        var role = OnlineRoomProtocol.ResolveSaveRole(savePlayerIds, stableId, out _);
+        if (role != OnlineRoomProtocol.SaveRole.Host)
+        {
+            var message = role == OnlineRoomProtocol.SaveRole.Joiner ? OnlineRoomProtocol.JoinerCannotHostMessage : OnlineRoomProtocol.SaveMismatchMessage;
+            OnlineRoomLog.Error($"拒绝开房续局: role={role} save={string.Join(",", savePlayerIds)} local={stableId}");
+            ShowInfoPopup(T("无法继续多人存档", "Cannot Continue Multiplayer Run"), message);
+            __result = Task.CompletedTask;
+            return false;
+        }
         __result = StartLoadedHostAsync(__instance, run);
         return false;
     }
@@ -311,52 +338,6 @@ public static class LanMultiplayerPatches
             if (value is ulong playerId && playerId > 0)
                 yield return playerId;
         }
-    }
-
-    private static bool TryResolveMultiplayerSavePlayerId(IReadOnlyCollection<ulong> savePlayerIds, out ulong playerId)
-    {
-        playerId = 0;
-        if (savePlayerIds == null || savePlayerIds.Count == 0)
-            return false;
-
-        foreach (var candidate in GetStableMultiplayerSavePlayerIdCandidates())
-        {
-            if (candidate > 0 && savePlayerIds.Contains(candidate))
-            {
-                playerId = candidate;
-                return true;
-            }
-        }
-
-        if (savePlayerIds.Count == 1)
-        {
-            playerId = savePlayerIds.First();
-            return true;
-        }
-
-        return false;
-    }
-
-    private static IEnumerable<ulong> GetStableMultiplayerSavePlayerIdCandidates()
-    {
-        if (TryGetStoredLanId(LanMultiplayerSavePlayerIdSettingKey, out var savedMultiplayerId))
-            yield return savedMultiplayerId;
-        if (TryGetStoredLanId(LanPlayerIdSettingKey, out var generatedLanId))
-            yield return generatedLanId;
-        yield return 1UL;
-    }
-
-    private static bool TryGetStoredLanId(string key, out ulong value)
-    {
-        value = 0;
-        var raw = AndroidSettingsBridge.GetString(key, string.Empty);
-        return ulong.TryParse(raw, out value) && value > 0;
-    }
-
-    private static void RememberMultiplayerSavePlayerId(ulong playerId)
-    {
-        if (playerId > 0)
-            SaveLanSetting(LanMultiplayerSavePlayerIdSettingKey, playerId);
     }
 
     private static bool IsSts2GameLobbyModLoaded()
@@ -511,6 +492,20 @@ public static class LanMultiplayerPatches
             return true;
         peerId = MapCustomPeerId(normalized);
         return true;
+    }
+
+    private static string _onlineNickname;
+    private static ulong _onlineNicknamePlayerId;
+
+    /// <summary>Shows the launcher nickname (pending-action.json) for the local player in this session.</summary>
+    internal static void SetOnlineNickname(string nickname, ulong localNetId)
+    {
+        var normalized = NormalizeText(nickname);
+        if (string.IsNullOrWhiteSpace(normalized))
+            return;
+        _onlineNickname = normalized;
+        _onlineNicknamePlayerId = localNetId;
+        SetPlayerNameOverride(PlatformType.None, localNetId, normalized);
     }
 
     private static string GetConfiguredPlayerDisplayName()
@@ -835,12 +830,15 @@ public static class LanMultiplayerPatches
             }
             else
             {
+                LogHostResult(error.Value.ToString());
                 AddModal(NErrorPopup.Create(error.Value));
             }
         }
         catch (Exception exception)
         {
             PatchHelper.Log($"LAN host failed: {exception}");
+            if (RemoteRoomPatches.HostingOnlineRoom)
+                OnlineRoomLog.Error("开房失败", exception);
             AddModal(NErrorPopup.Create(new NetErrorInfo(NetError.InternalError, selfInitiated: false)));
             throw;
         }
@@ -888,8 +886,16 @@ public static class LanMultiplayerPatches
             }
             else
             {
+                LogHostResult(error.Value.ToString());
                 AddModal(NErrorPopup.Create(error.Value));
             }
+        }
+        catch (Exception exception)
+        {
+            PatchHelper.Log($"LAN loaded host failed: {exception}");
+            if (RemoteRoomPatches.HostingOnlineRoom)
+                OnlineRoomLog.Error("续局开房失败", exception);
+            throw;
         }
         finally
         {
@@ -906,10 +912,18 @@ public static class LanMultiplayerPatches
         return GameMode.Standard;
     }
 
+    private static void LogHostResult(string error)
+    {
+        PatchHelper.Log($"LAN host could not start ENet on UDP {DefaultPort}: {error}");
+        if (RemoteRoomPatches.HostingOnlineRoom)
+            OnlineRoomLog.Error($"开房失败: 本机 UDP {DefaultPort} 无法监听: {error}");
+    }
+
     private static void ShowLanHostInfo()
     {
         if (RemoteRoomPatches.HostingOnlineRoom)
         {
+            OnlineRoomLog.Info($"房间已开启，本机 UDP {DefaultPort}，本机 NetId {OnlineRoomProtocol.HostNetId}");
             AddModal(NErrorPopup.Create(T("联机房间已开启", "Online Room Ready"), T("朋友在启动器「联机小屋」的在线房间列表里就能看到并加入你的房间。", "Friends can find and join your room in the launcher's Online Cottage room list."), showReportBugButton: false));
             return;
         }
@@ -990,6 +1004,8 @@ public static class LanMultiplayerPatches
     {
         PlayerNameOverrides.Remove(platformType);
         SetPlayerNameOverride(platformType, PlatformUtil.GetLocalPlayerId(platformType), GetConfiguredPlayerDisplayName());
+        if (platformType == PlatformType.None && _onlineNickname != null)
+            SetPlayerNameOverride(platformType, _onlineNicknamePlayerId, _onlineNickname);
     }
 
     private static void ShowInfoPopup(string title, string body)

@@ -33,6 +33,9 @@ public class Sts2CrashActivity extends AppCompatActivity {
 
 		config = CustomActivityOnCrash.getConfigFromIntent(getIntent());
 		fullErrorDetails = buildCompactErrorDetails();
+		if (savedInstanceState == null) {
+			LauncherLog.e(LauncherLog.TAG_APP, "显示崩溃页: " + buildCrashSummary());
+		}
 
 		bindContent();
 		bindActions();

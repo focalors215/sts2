@@ -39,4 +39,19 @@
     <string name="online_hint_refused">连不上 frp 服务器：检查地址、端口，以及服务器防火墙/安全组。</string>
     <string name="online_hint_eof">连接被服务器或网络中断：检查端口是否为 frps 端口、是否被代理软件拦截。</string>
     <string name="online_hint_timeout">连接 frp 服务器超时：检查网络和服务器防火墙/安全组。</string>
+    <string name="online_room_platform_format"> · %1$s</string>
+    <string name="online_platform_android">Android</string>
+    <string name="online_platform_windows">Windows</string>
+    <string name="online_platform_ios">iPad</string>
+    <string name="online_token_title">房主令牌</string>
+    <string name="online_token_desc">创建房间需要联机服务器的令牌（向服务器管理员索取）。令牌只保存在本机，不进备份、日志和导出；加入房间不需要令牌。</string>
+    <string name="online_token_hint">粘贴令牌</string>
+    <string name="online_token_button">设置房主令牌</string>
+    <string name="online_token_clear">清除</string>
+    <string name="online_token_saved_state">已保存房主令牌。</string>
+    <string name="online_token_missing_state">还没有房主令牌，创建房间前需要先填写。</string>
+    <string name="online_token_required">创建房间需要房主令牌，请先在「设置房主令牌」中填写。</string>
+    <string name="online_compat_title">兼容包不支持联机小屋</string>
+    <string name="online_compat_disabled">兼容包已关闭。联机小屋依赖兼容包里的联机组件，请在设置中开启兼容包。</string>
+    <string name="online_compat_unsupported_format">当前启动配置的兼容包（%1$s，%2$s）没有联机组件。请在「版本 → 兼容包」更新到新版兼容包；联机小屋支持 v0.107.1 与 v0.111.0。</string>
 </resources>

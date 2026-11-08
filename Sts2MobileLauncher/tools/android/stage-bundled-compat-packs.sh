@@ -19,6 +19,9 @@ COMPAT_PACK_APPLY_BUILD_INFO_PATCHES="$(sts2_config_value COMPAT_PACK_APPLY_BUIL
 export COMPAT_PACK_APPLY_BUILD_INFO_PATCHES
 COMPAT_PACK_BUILD_MODE="$(sts2_config_value COMPAT_PACK_BUILD_MODE compat.pack_build_mode matrix)"
 export COMPAT_PACK_BUILD_MODE
+# Optional comma-separated target ids (e.g. v0.107.1,v0.111.0) when only some original references exist locally.
+COMPAT_MATRIX_TARGETS="$(sts2_config_value COMPAT_MATRIX_TARGETS compat.matrix_targets "")"
+export COMPAT_MATRIX_TARGETS
 
 if [[ ! -d "$COMPAT_ROOT/.git" && ! -f "$COMPAT_ROOT/.git" ]]; then
   echo "Missing compat submodule checkout: $COMPAT_ROOT" >&2
@@ -104,6 +107,8 @@ apply_build_info_patch() {
     "STS2AndroidPortCompat/Patches/AndroidInGameSettingsPatches.cs" \
     "STS2AndroidPortCompat/Patches/LanMultiplayerPatches.cs" \
     "STS2AndroidPortCompat/Patches/RemoteRoomPatches.cs" \
+    "STS2AndroidPortCompat/Patches/OnlineRoomLog.cs" \
+    "STS2AndroidPortCompat/Patches/OnlineRoomProtocol.cs" \
     "STS2AndroidPortCompat/Patches/ExtendedMultiplayerRoomPatches.cs" \
     "STS2AndroidPortCompat/Patches/MobileTooltipPatches.cs" \
     "STS2AndroidPortCompat/Patches/IntentAnimationPatches.cs" \

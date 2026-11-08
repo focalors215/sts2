@@ -16,8 +16,6 @@ import android.widget.ScrollView;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
 
-import org.json.JSONObject;
-
 import java.util.ArrayList;
 import java.util.List;
 
@@ -52,6 +50,10 @@ public final class NetworkPage {
 		if (!OnlineRoomService.isConfigured()) {
 			ExtraSettingsUi.addCardSpacing(root, messageCard(context.getString(FrpBridge.isAvailable() ? R.string.online_not_configured : R.string.online_component_missing)));
 			return scrollView;
+		}
+		String supportProblem = service.onlineSupportProblem();
+		if (supportProblem != null) {
+			ExtraSettingsUi.addCardSpacing(root, messageCard(supportProblem));
 		}
 		ExtraSettingsUi.addCardSpacing(root, profileCard());
 		ExtraSettingsUi.addCardSpacing(root, createCard());
@@ -118,6 +120,10 @@ public final class NetworkPage {
 		MaterialSymbols.applyButtonIcon(create, "add_circle", android.content.res.ColorStateList.valueOf(ExtraSettingsUi.COLOR_ON_PRIMARY), 20);
 		create.setOnClickListener(v -> createRoom());
 		ExtraSettingsUi.addSmallSpacing(content, create);
+		content.addView(ExtraSettingsUi.caption(context, context.getString(service.hasHostToken() ? R.string.online_token_saved_state : R.string.online_token_missing_state)));
+		MaterialButton token = CottageTheme.secondaryButton(context, context.getString(R.string.online_token_button), "lock_open");
+		token.setOnClickListener(v -> promptHostToken(null));
+		ExtraSettingsUi.addSmallSpacing(content, token);
 		return card;
 	}
 
@@ -166,6 +172,10 @@ public final class NetworkPage {
 		row.addView(texts, textParams);
 		texts.addView(ExtraSettingsUi.sectionTitle(context, room.name));
 		String detail = context.getString(R.string.online_room_version_format, room.version);
+		String platform = platformLabel(room.platform);
+		if (platform != null) {
+			detail += context.getString(R.string.online_room_platform_format, platform);
+		}
 		if (room.continuing) {
 			detail += context.getString(R.string.online_room_continuing_suffix);
 		}
@@ -183,6 +193,19 @@ public final class NetworkPage {
 		row.addView(join, joinParams);
 		content.addView(row);
 		return card;
+	}
+
+	private String platformLabel(String platform) {
+		switch (platform) {
+			case "android":
+				return context.getString(R.string.online_platform_android);
+			case "windows":
+				return context.getString(R.string.online_platform_windows);
+			case "ios":
+				return context.getString(R.string.online_platform_ios);
+			default:
+				return null;
+		}
 	}
 
 	private View messageCard(String message) {
@@ -210,6 +233,13 @@ public final class NetworkPage {
 		if (!(context instanceof Activity) || ((Activity)context).isFinishing()) {
 			return;
 		}
+		if (!checkOnlineSupport()) {
+			return;
+		}
+		if (!service.hasHostToken()) {
+			promptHostToken(this::createRoom);
+			return;
+		}
 		AlertDialog progress = new AlertDialog.Builder(context)
 			.setTitle(R.string.online_creating_title)
 			.setMessage(R.string.online_creating_message)
@@ -221,6 +251,13 @@ public final class NetworkPage {
 			}
 			progress.dismiss();
 			if (error != null) {
+				if (OnlineRoomService.isTokenError(error)) {
+					try {
+						service.setHostToken("");
+					} catch (Exception exception) {
+						LauncherLog.w(LauncherLog.TAG_FRP, "清除错误的房主令牌失败", exception);
+					}
+				}
 				new AlertDialog.Builder(context)
 					.setTitle(R.string.online_create_failed)
 					.setMessage(error)
@@ -228,23 +265,86 @@ public final class NetworkPage {
 					.show();
 				return;
 			}
-			startWithAction(new JSONObject(), "host", null, 0);
+			startWithAction("host", null, 0);
 		});
 	}
 
 	private void joinRoom(OnlineRoomService.Room room) {
-		startWithAction(new JSONObject(), "join", OnlineRoomService.server(), room.port);
+		if (!checkOnlineSupport()) {
+			return;
+		}
+		LauncherLog.i(LauncherLog.TAG_ONLINE, "加入房间: 槽位 " + room.slot + " 版本 " + room.version + " 平台 " + (room.platform.isEmpty() ? "未知" : room.platform));
+		startWithAction("join", OnlineRoomService.server(), room.port);
 	}
 
-	private void startWithAction(JSONObject action, String type, String host, int port) {
+	private boolean checkOnlineSupport() {
+		String problem = service.onlineSupportProblem();
+		if (problem == null) {
+			return true;
+		}
+		LauncherLog.w(LauncherLog.TAG_ONLINE, "兼容包不支持联机小屋: " + problem);
+		new AlertDialog.Builder(context)
+			.setTitle(R.string.online_compat_title)
+			.setMessage(problem)
+			.setPositiveButton(android.R.string.ok, null)
+			.show();
+		return false;
+	}
+
+	private void promptHostToken(Runnable afterSave) {
+		if (!(context instanceof Activity) || ((Activity)context).isFinishing()) {
+			return;
+		}
+		EditText input = new EditText(context);
+		input.setSingleLine(true);
+		input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+		input.setHint(R.string.online_token_hint);
+		int padding = ExtraSettingsUi.dp(context, 20);
+		LinearLayout wrapper = ExtraSettingsUi.vertical(context);
+		wrapper.setPadding(padding, ExtraSettingsUi.dp(context, 8), padding, 0);
+		wrapper.addView(input);
+		AlertDialog.Builder builder = new AlertDialog.Builder(context)
+			.setTitle(R.string.online_token_title)
+			.setMessage(R.string.online_token_desc)
+			.setView(wrapper)
+			.setNegativeButton(android.R.string.cancel, null)
+			.setPositiveButton(R.string.online_nickname_save, (dialog, which) -> {
+				String token = input.getText().toString().trim();
+				if (token.isEmpty()) {
+					return;
+				}
+				try {
+					service.setHostToken(token);
+				} catch (Exception exception) {
+					LauncherLog.e(LauncherLog.TAG_FRP, "保存房主令牌失败", exception);
+					actions.showError(exception);
+					return;
+				}
+				actions.refreshCurrentScreen();
+				if (afterSave != null) {
+					afterSave.run();
+				}
+			});
+		if (service.hasHostToken()) {
+			builder.setNeutralButton(R.string.online_token_clear, (dialog, which) -> {
+				try {
+					service.setHostToken("");
+				} catch (Exception exception) {
+					LauncherLog.e(LauncherLog.TAG_FRP, "清除房主令牌失败", exception);
+					actions.showError(exception);
+					return;
+				}
+				actions.refreshCurrentScreen();
+			});
+		}
+		builder.show();
+	}
+
+	private void startWithAction(String type, String host, int port) {
 		try {
-			action.put("type", type);
-			if (host != null) {
-				action.put("host", host);
-				action.put("port", port);
-			}
-			service.writePendingAction(action);
+			service.writePendingAction(type, host, port);
 		} catch (Exception exception) {
+			LauncherLog.e(LauncherLog.TAG_ONLINE, "写入联机指令失败", exception);
 			actions.showError(exception);
 			return;
 		}

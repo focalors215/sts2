@@ -55,6 +55,7 @@ import com.google.android.material.textfield.TextInputLayout;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.Collections;
@@ -3454,6 +3455,7 @@ public class SteamWorkshopActivity extends AppCompatActivity {
 	}
 
 	private void showError(Exception exception) {
+		LauncherLog.e("workshop", "操作失败（已提示用户）: " + getClass().getSimpleName(), exception);
 		if (isUiUnavailable()) {
 			return;
 		}
@@ -4108,8 +4110,13 @@ public class SteamWorkshopActivity extends AppCompatActivity {
 		private Bitmap fetchBitmap(ImageJob job) throws IOException {
 			IOException lastError = null;
 			for (OkHttpClient client : new OkHttpClient[] { defaultClient, originalClient, directClient }) {
-				if (job.cancelled) throw new IOException("Image request cancelled.");
-				try { return fetchBitmap(client, job); } catch (IOException exception) { lastError = exception; }
+				if (job.cancelled || Thread.currentThread().isInterrupted()) throw new InterruptedIOException("Image request cancelled.");
+				try {
+					return fetchBitmap(client, job);
+				} catch (IOException exception) {
+					if (job.cancelled || Thread.currentThread().isInterrupted()) throw exception;
+					lastError = exception;
+				}
 			}
 			throw lastError == null ? new IOException("Image request failed.") : lastError;
 		}
@@ -4185,7 +4192,8 @@ public class SteamWorkshopActivity extends AppCompatActivity {
 			}
 			jobs.clear();
 			pending.clear();
-			workers.shutdownNow();
+			// Call.cancel() stops I/O; interrupting OkHttp's connect wait can escape as InterruptedException.
+			workers.shutdown();
 			defaultClient.dispatcher().cancelAll();
 			originalClient.dispatcher().cancelAll();
 			directClient.dispatcher().cancelAll();

@@ -15,6 +15,8 @@ typedef void (^STS2ModCompletion)(NSError * _Nullable error);
 - (void)importStagedDirectoryURL:(NSURL *)url source:(NSString *)source completion:(STS2ModCompletion)completion;
 /// Copies a document-picker ZIP/PCK into private staging under security-scoped access.
 - (void)importDocumentURL:(NSURL *)url completion:(STS2ModCompletion)completion;
+/// 同上，记录来源（例如「Nexus Mods 123」）。
+- (void)importDocumentURL:(NSURL *)url source:(NSString *)source completion:(STS2ModCompletion)completion;
 - (void)setEnabled:(BOOL)enabled modID:(NSString *)modID completion:(STS2ModCompletion)completion;
 - (void)moveModID:(NSString *)modID toIndex:(NSUInteger)index completion:(STS2ModCompletion)completion;
 - (void)deleteModID:(NSString *)modID completion:(STS2ModCompletion)completion;

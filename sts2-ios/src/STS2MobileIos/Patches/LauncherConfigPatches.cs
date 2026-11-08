@@ -57,12 +57,13 @@ public static class LauncherConfigPatches
         {
             lock (Gate)
             {
-                if (ulong.TryParse(Network["playerId"]?.ToString(), out var saved) && saved > 0)
+                // 规范 §3.4：合法范围 [2, 2^63-1]；读到 0/1/非法值时重新生成（1 永远留给 ENet 房主）。
+                if (ulong.TryParse(Network["playerId"]?.ToString(), out var saved) && MultiplayerIdentity.IsValidPlayerId(saved))
                     return saved;
                 var generated = CreatePeerId();
                 Network["playerId"] = generated.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 Save();
-                PatchHelper.Log($"Created persistent LAN peer ID {generated}.");
+                OnlineRoomLog.Info($"生成本机联机身份 playerId={generated}（原值无效或缺失）");
                 return generated;
             }
         }

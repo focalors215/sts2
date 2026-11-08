@@ -2584,6 +2584,10 @@ public final class ExtraSettingsRepository {
 			if (isSymbolicLink(child)) {
 				continue;
 			}
+			if (isExcludedFromDataExport(rootDirectory, child)) {
+				// frp host token and frpc.toml stay on this device (cross-platform-parity §3.2).
+				continue;
+			}
 			if (child.isDirectory()) {
 				zipDirectoryRecursive(rootDirectory, child, outputStream, normalizedPrefix);
 				continue;
@@ -2595,6 +2599,16 @@ public final class ExtraSettingsRepository {
 			}
 			outputStream.closeEntry();
 		}
+	}
+
+	static boolean isExcludedFromDataExport(File rootDirectory, File file) {
+		String relative = file.getAbsolutePath().startsWith(rootDirectory.getAbsolutePath())
+			? file.getAbsolutePath().substring(rootDirectory.getAbsolutePath().length()).replace('\\', '/')
+			: "";
+		while (relative.startsWith("/")) {
+			relative = relative.substring(1);
+		}
+		return relative.equals("no_backup/frp") || relative.startsWith("no_backup/frp/");
 	}
 
 	private String normalizeZipEntryPrefix(String prefix) {

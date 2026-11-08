@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const online = require('./online');
+const { log } = require('./logger');
 
 const DEFAULT_SETTINGS = Object.freeze({
 	windowMode: 'default',      // default / fullscreen / windowed
@@ -18,12 +19,17 @@ const DEFAULT_SETTINGS = Object.freeze({
 	snapshotKeep: 5,
 });
 
+const FEATURE_SECTIONS = ['ai', 'webdav', 'steamCloud', 'workshop', 'nexus', 'update'];
+
 /** 启动器自己的配置：启动配置列表（游戏目录）与全局设置，保存在 userData/launcher.json。 */
 class LauncherConfig {
 	constructor(directory) {
 		this.directory = directory;
 		this.file = path.join(directory, 'launcher.json');
 		this.data = this.load();
+		if (this.loadedLegacyProfiles) {
+			this.save();
+		}
 	}
 
 	load() {
@@ -31,10 +37,15 @@ class LauncherConfig {
 		try {
 			raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
 		} catch (error) {
+			// 第一次运行没有配置文件；其他错误（损坏）记日志后按默认配置继续。
+			if (error.code !== 'ENOENT') {
+				log().e('app', `启动器配置读取失败，改用默认配置: ${this.file}`, error);
+			}
 			raw = {};
 		}
 		const profiles = Array.isArray(raw.profiles) ? raw.profiles.filter(p => p && typeof p.gameDir === 'string') : [];
 		const legacyProfiles = raw.version === undefined || raw.version === 1;
+		this.loadedLegacyProfiles = legacyProfiles && profiles.some(p => p.source === 'steam' && p.launchViaSteam === true);
 		return {
 			version: 2,
 			profiles: profiles.map(p => normalizeProfile(legacyProfiles && p.source === 'steam' ? { ...p, launchViaSteam: false } : p)),
@@ -43,6 +54,8 @@ class LauncherConfig {
 			settings: normalizeSettings(raw.settings),
 			welcomeDone: raw.welcomeDone === true,
 			online: normalizeOnline(raw.online),
+			// 各功能自己的非敏感配置（AI 分析、云存档、创意工坊、Nexus、更新检查）；凭据在 secrets.json。
+			...Object.fromEntries(FEATURE_SECTIONS.map(key => [key, raw[key] && typeof raw[key] === 'object' && !Array.isArray(raw[key]) ? raw[key] : {}])),
 		};
 	}
 
@@ -123,6 +136,20 @@ class LauncherConfig {
 
 	get online() {
 		return this.data.online;
+	}
+
+	/** 功能配置段：读 / 合并写。 */
+	section(key) {
+		return this.data[key] || {};
+	}
+
+	updateSection(key, patch) {
+		if (!FEATURE_SECTIONS.includes(key)) {
+			throw new Error(`unknown config section ${key}`);
+		}
+		this.data[key] = { ...this.section(key), ...patch };
+		this.save();
+		return this.data[key];
 	}
 
 	updateOnline(patch) {

@@ -342,6 +342,16 @@
       "kind": "postfix",
       "hookType": "STS2MobileIos.Patches.ResourcePackPatches",
       "hookMethod": "LocalDefaultPostfix"
+    },
+    {
+      "targetType": "MegaCrit.Sts2.Core.Nodes.CommonUi.NErrorPopup",
+      "targetMethod": "Create",
+      "kind": "prefix",
+      "hookType": "STS2MobileIos.Patches.OnlineRoomLog",
+      "hookMethod": "NetErrorPopupPrefix",
+      "targetParams": [
+        "NetErrorInfo"
+      ]
     }
   ]
 }

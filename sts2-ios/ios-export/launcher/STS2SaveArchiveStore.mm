@@ -35,6 +35,15 @@ static NSString *SnapshotFilename(NSString *name) {
     return [NSString stringWithFormat:@"Snapshot-%@-%@.zip", clean, NSUUID.UUID.UUIDString];
 }
 
+// "Snapshot-<名字>-<UUID>.zip" → "<名字>"；不符合格式的原样返回文件名。
+static NSString *SnapshotTitle(NSString *filename) {
+    NSString *stem = filename.stringByDeletingPathExtension;
+    if (![stem hasPrefix:@"Snapshot-"] || stem.length <= 9 + 37) return filename;
+    NSString *uuid = [stem substringFromIndex:stem.length - 36];
+    if (![[NSUUID alloc] initWithUUIDString:uuid] || [stem characterAtIndex:stem.length - 37] != '-') return filename;
+    return [stem substringWithRange:NSMakeRange(9, stem.length - 9 - 37)];
+}
+
 static BOOL HasSaveFile(NSDictionary *files) {
     for (NSString *p in files)
         if ([p.pathExtension.lowercaseString isEqualToString:@"save"])
@@ -276,6 +285,7 @@ static BOOL SafeTreeAncestry(NSURL *url, NSURL *documents, NSError **error) {
             [out addObject:@{
                 @"path" : u,
                 @"name" : u.lastPathComponent,
+                @"title" : SnapshotTitle(u.lastPathComponent),
                 @"size" : v[NSURLFileSizeKey] ?: @0,
                 @"date" : v[NSURLContentModificationDateKey] ?: NSDate.distantPast
             }];
@@ -283,6 +293,23 @@ static BOOL SafeTreeAncestry(NSURL *url, NSURL *documents, NSError **error) {
     return [out sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
         return [b[@"date"] compare:a[@"date"]];
     }];
+}
+- (BOOL)deleteSnapshotAtURL:(NSURL *)url error:(NSError **)error {
+    NSURL *parent = url.URLByDeletingLastPathComponent.URLByStandardizingPath;
+    if (![parent.path isEqualToString:_archiveRoot.URLByStandardizingPath.path] || ![url.lastPathComponent hasPrefix:@"Snapshot-"]) {
+        if (error) *error = ArchiveError(20, @"只能删除启动器创建的快照。");
+        return NO;
+    }
+    return [NSFileManager.defaultManager removeItemAtURL:url error:error];
+}
+- (NSUInteger)pruneSnapshotsTitled:(NSString *)title keep:(NSUInteger)keep {
+    NSUInteger removed = 0, kept = 0;
+    for (NSDictionary *snapshot in [self snapshots]) { // newest first
+        if (![snapshot[@"title"] isEqualToString:title]) continue;
+        if (kept < keep) { kept++; continue; }
+        if ([self deleteSnapshotAtURL:snapshot[@"path"] error:nil]) removed++;
+    }
+    return removed;
 }
 - (BOOL)restoreArchiveAtURL:(NSURL *)archiveURL error:(NSError **)error {
     NSError *e = nil;

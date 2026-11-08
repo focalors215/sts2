@@ -23,6 +23,12 @@ const CONTENT_BOTTOM = 960;
 const STEAM_APP_ID = '2868840';
 const REPO_URL = 'https://github.com/ModinMobileSTS/Sts2MobileLauncher';
 
+// 额外页面（pages/*.js 注册）：key → { build(inner, wide), parent }，parent 为侧栏里高亮的入口。
+const PAGES = {};
+function registerPage(key, page) {
+	PAGES[key] = page;
+}
+
 const ui = {
 	state: null,
 	tab: 'home',
@@ -108,12 +114,22 @@ function switchControl(checked, onChange, disabled, label) {
 function formatError(error) {
 	const message = error && error.message ? error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(error);
 	const known = { no_profile: 'err_no_profile', game_not_ready: 'err_game_not_ready', game_running: 'err_game_running', no_settings_save: 'err_no_settings_save', no_manifest: 'no_manifest',
-		online_not_configured: 'online_not_configured', online_component_missing: 'online_component_missing', online_no_settings: 'online_no_settings', online_bad_address: 'online_bad_address' };
-	return known[message] ? t(known[message]) : t('error', { message });
+		online_not_configured: 'online_not_configured', online_token_required: 'online_token_required', online_component_missing: 'online_mod_missing', online_no_settings: 'online_no_settings', online_bad_address: 'online_bad_address', online_unsupported_version: 'online_unsupported_version' };
+	const net = ui.state && ui.state.online;
+	const params = net ? { versions: net.supportedVersions.join(' / '), version: net.gameVersion || '?' } : {};
+	if (known[message]) {
+		return t(known[message], params);
+	}
+	const translated = t(`err_${message}`, params);
+	return translated !== `err_${message}` ? translated : t('error', { message });
 }
 
 let toastTimer = null;
 function toast(message, isError) {
+	if (isError) {
+		// 规范 §5.1：展示给用户的错误提示都要进日志（主进程已记原始异常，这里记用户看到的文案）。
+		logUi('W', `错误提示: ${message}`);
+	}
 	const el = document.getElementById('toast');
 	el.textContent = message;
 	el.classList.toggle('error', !!isError);
@@ -142,6 +158,19 @@ async function run(task, success) {
 		ui.busy = false;
 	}
 }
+
+/** 渲染进程写启动器日志（失败只能退回控制台）。 */
+function logUi(level, message, error) {
+	api.writeLog(level, 'ui', message, error && error.stack ? error.stack : '').catch(failure => console.error(failure));
+}
+
+window.addEventListener('error', event => {
+	logUi('E', `渲染进程未捕获异常: ${event.message} (${event.filename}:${event.lineno}:${event.colno})`, event.error);
+});
+window.addEventListener('unhandledrejection', event => {
+	const reason = event.reason;
+	logUi('E', `渲染进程未处理的 Promise 拒绝: ${reason && reason.message ? reason.message : String(reason)}`, reason instanceof Error ? reason : null);
+});
 
 // ---------- 弹窗 ----------
 function modal(build) {
@@ -222,6 +251,9 @@ async function refresh() {
 
 function openTab(tab) {
 	ui.tab = tab;
+	if (PAGES[tab] && PAGES[tab].onOpen) {
+		PAGES[tab].onOpen();
+	}
 	api.setLastTab(tab).catch(() => {});
 	render();
 	const page = document.querySelector('.page');
@@ -275,12 +307,14 @@ function buildSidebar(tab) {
 		['mods', 'nav_mods', 'extension'],
 		['network', 'nav_network', 'groups'],
 		['versions', 'nav_versions', 'layers'],
+		['logs', 'nav_logs', 'description'],
 		['settings', 'nav_settings', 'settings'],
 		['about', 'nav_about', 'info'],
 	];
 	const sidebar = h('nav', { class: 'sidebar' }, artCard('brand', t('theme_name')));
+	const active = PAGES[tab] && PAGES[tab].parent ? PAGES[tab].parent : tab;
 	for (const [key, label, glyph] of items) {
-		sidebar.append(h('button', { class: `nav-button${tab === key ? ' selected' : ''}`, 'aria-current': tab === key ? 'page' : null, onclick: () => openTab(key) }, icon(glyph), label ? t(label) : ''));
+		sidebar.append(h('button', { class: `nav-button${active === key ? ' selected' : ''}`, 'aria-current': active === key ? 'page' : null, onclick: () => openTab(key) }, icon(glyph), label ? t(label) : ''));
 	}
 	if (window.innerHeight >= 650) {
 		sidebar.append(artCard('postcard', t('postcard'), 'postcard'));
@@ -289,17 +323,20 @@ function buildSidebar(tab) {
 }
 
 function buildTabs(tab) {
-	const items = [['home', 'tab_home'], ['mods', 'tab_mods'], ['network', 'tab_network'], ['versions', 'tab_versions'], ['settings', 'tab_settings'], ['about', 'tab_about']];
+	const items = [['home', 'tab_home'], ['mods', 'tab_mods'], ['network', 'tab_network'], ['versions', 'tab_versions'], ['logs', 'tab_logs'], ['settings', 'tab_settings'], ['about', 'tab_about']];
 	const tabs = h('div', { class: 'tabs', role: 'tablist' });
+	const active = PAGES[tab] && PAGES[tab].parent ? PAGES[tab].parent : tab;
 	for (const [key, label] of items) {
-		tabs.append(h('button', { class: `tab${tab === key ? ' selected' : ''}`, role: 'tab', 'aria-selected': tab === key ? 'true' : 'false', onclick: () => openTab(key) }, t(label)));
+		tabs.append(h('button', { class: `tab${active === key ? ' selected' : ''}`, role: 'tab', 'aria-selected': active === key ? 'true' : 'false', onclick: () => openTab(key) }, t(label)));
 	}
 	return h('div', { class: 'tabs-holder' }, tabs);
 }
 
 function buildPage(tab, wide) {
 	const inner = h('div', { class: 'page-inner' });
-	if (tab === 'mods') {
+	if (PAGES[tab]) {
+		PAGES[tab].build(inner, wide);
+	} else if (tab === 'mods') {
 		buildModsPage(inner);
 	} else if (tab === 'network') {
 		buildNetworkPage(inner);
@@ -398,6 +435,9 @@ async function launchGame() {
 		openTab('versions');
 		return;
 	}
+	if (!await cloudBeforeLaunch()) {
+		return;
+	}
 	toast(t('launching'));
 	await run(() => api.launch(), result => (result.via === 'steam' ? t('launched_steam') : t('launched_exe')));
 }
@@ -449,8 +489,8 @@ function buildDashboard(inner, wide) {
 	const advanced = [
 		['layers', 'act_profiles', () => openTab('versions')],
 		['verified', 'act_validate', () => run(() => api.openExternal(`steam://validate/${STEAM_APP_ID}`))],
-		['description', 'act_logs', () => run(() => api.open('logs'))],
-		['inventory_2', 'act_data', () => run(() => api.open('data'))],
+		['description', 'act_logs', () => openTab('logs')],
+		['folder_managed', 'act_files', () => openTab('files')],
 	];
 	const columns = wide ? 2 : 4;
 	const rightItems = [
@@ -522,6 +562,8 @@ function buildModsPage(inner) {
 	inner.append(h('div', { class: 'chip-row' },
 		h('button', { class: 'chip', onclick: () => importMod('zip') }, icon('folder_zip'), t('import_zip')),
 		h('button', { class: 'chip', onclick: () => importMod('folder') }, icon('create_new_folder'), t('import_folder')),
+		h('button', { class: 'chip', onclick: () => openTab('workshop') }, icon('storefront'), t('nav_workshop')),
+		PAGES.nexus ? h('button', { class: 'chip', onclick: () => openTab('nexus') }, icon('shopping_bag'), t('nav_nexus')) : null,
 		h('button', { class: 'chip', onclick: () => run(() => api.open('mods')) }, icon('folder_open'), t('open_folder')),
 		h('button', { class: 'chip', onclick: () => run(() => Promise.resolve()) }, icon('refresh'), t('refresh')),
 		filters.map(([key, label]) => h('button', { class: `chip${ui.modFilter === key ? ' selected' : ''}`, onclick: () => { ui.modFilter = key; render(); } }, t(label)))));
@@ -624,7 +666,16 @@ async function importMod(kind) {
 	if (!plan) {
 		return;
 	}
-	const choice = await modal((box, close) => {
+	if (await importPlanDialog(plan)) {
+		await run(() => api.commitModImport(plan.token), ids => t('imported', { names: ids.join(', ') }));
+	} else {
+		api.cancelModImport(plan.token).catch(error => logUi('W', '取消 MOD 导入失败', error));
+	}
+}
+
+/** MOD 导入确认（本地导入与创意工坊安装共用）：显示将安装的 MOD、同 ID 冲突与被覆盖的文件。 */
+function importPlanDialog(plan) {
+	return modal((box, close) => {
 		box.append(h('h2', {}, t('import_title')),
 			h('div', { class: 'body' }, t('import_will_install', { folder: plan.folder })),
 			h('div', { class: 'info-card' }, plan.incoming.map(m => h('div', {}, h('b', {}, m.name), h('span', { class: 'muted' }, `  ${[m.version, m.author].filter(Boolean).join(' · ')}`)))));
@@ -642,11 +693,6 @@ async function importMod(kind) {
 			h('button', { class: `btn ${risky ? 'danger' : 'primary'} small`, onclick: () => close(true) },
 				plan.conflicts.length ? t('import_use_new') : plan.overwrites.length ? t('import_replace') : t('import_confirm'))));
 	});
-	if (choice) {
-		await run(() => api.commitModImport(plan.token), ids => t('imported', { names: ids.join(', ') }));
-	} else {
-		api.cancelModImport(plan.token).catch(() => {});
-	}
 }
 
 // ---------- 版本管理 ----------
@@ -795,6 +841,9 @@ function buildSavesSettings(inner, grid) {
 	}, icon('person', 'lead'),
 	h('div', { class: 'grow' }, h('div', { class: 'setting-title' }, t('set_account')), h('div', { class: 'setting-desc' }, t('set_account_desc'))),
 	h('span', { class: 'setting-value mono' }, state.saves.account ? shortAccount(state.saves.account) : t('account_none')), icon('chevron_right', 'muted')));
+	grid.append(h('button', { class: 'setting clickable', onclick: () => openTab('cloud') }, icon('cloud_sync', 'lead'),
+		h('div', { class: 'grow' }, h('div', { class: 'setting-title' }, t('cloud_title')), h('div', { class: 'setting-desc' }, t('cloud_entry_desc'))),
+		icon('chevron_right', 'muted')));
 	grid.append(toggleRow('photo_camera', 'snapshotBeforeLaunch', t('set_snapshot_launch'), t('set_snapshot_launch_desc')),
 		choiceRow('history', 'snapshotKeep', t('set_snapshot_keep'), t('set_snapshot_keep_desc')));
 
@@ -814,6 +863,7 @@ function buildSavesSettings(inner, grid) {
 			} }, icon('restore'), t('restore')),
 			h('button', { class: 'icon-btn', title: t('delete'), 'aria-label': t('delete'), onclick: () => run(() => api.deleteSnapshot(snapshot.name)) }, icon('delete'))));
 	}
+	inner.append(backupCard());
 	inner.append(h('div', { class: 'row wrap' }, h('h2', { class: 'section-heading grow' }, t('snapshots')),
 		h('button', { class: 'btn secondary small', disabled: !state.saves.account, onclick: () => run(() => api.createSnapshot(), t('snapshot_created')) }, icon('add_a_photo'), t('snapshot_now'))), list);
 }
@@ -825,6 +875,9 @@ function buildSystemSettings(inner, grid) {
 	args.addEventListener('change', () => run(() => api.updateSettings({ extraArgs: args.value.trim() })));
 	grid.append(h('div', { class: 'setting column' },
 		h('div', { class: 'row' }, icon('terminal', 'lead'), h('div', { class: 'grow' }, h('div', { class: 'setting-title' }, t('set_args')), h('div', { class: 'setting-desc' }, t('set_args_desc')))), args));
+	grid.append(h('button', { class: 'setting clickable', onclick: () => openTab('files') }, icon('folder_managed', 'lead'),
+		h('div', { class: 'grow' }, h('div', { class: 'setting-title' }, t('files_title')), h('div', { class: 'setting-desc' }, t('files_entry_desc'))),
+		icon('chevron_right', 'muted')));
 	grid.append(h('div', { class: 'setting' }, icon('inventory_2', 'lead'),
 		h('div', { class: 'grow' }, h('div', { class: 'setting-title' }, t('set_data')), h('div', { class: 'setting-desc mono' }, ui.state.dataDir)),
 		h('button', { class: 'chip', onclick: () => run(() => api.open('data')) }, icon('folder_open'), t('open'))));
@@ -838,29 +891,42 @@ function buildSystemSettings(inner, grid) {
 function buildNetworkPage(inner) {
 	const net = ui.state.online;
 	inner.append(h('div', { class: 'page-header' }, pageTitle(t('nav_network'), t('tagline_network'))));
-	if (!net.componentReady) {
-		inner.append(h('div', { class: 'card compact notice warn' }, icon('warning'), h('span', {}, t('online_component_missing'))));
-		return;
-	}
 	const profile = currentProfile();
 	if (!profile) {
 		inner.append(h('div', { class: 'card compact notice' }, icon('info'), h('span', {}, t('err_no_profile'))),
 			h('div', {}, h('button', { class: 'btn secondary small', onclick: () => openTab('versions') }, icon('layers'), t('nav_versions'))));
 		return;
 	}
+	if (!net.versionSupported) {
+		inner.append(h('div', { class: 'card compact notice warn' }, icon('warning'),
+			h('span', {}, t('online_unsupported_version', { versions: net.supportedVersions.join(' / '), version: net.gameVersion || '?' }))));
+		return;
+	}
+	if (!net.modReady) {
+		inner.append(h('div', { class: 'card compact notice warn' }, icon('warning'), h('span', {}, t('online_mod_missing'))));
+		return;
+	}
 	if (net.hosting.state !== 'idle') {
 		inner.append(hostingCard(net));
 	}
 	inner.append(nicknameCard(net));
+	inner.append(h('div', { class: 'card compact notice' }, icon('info'), h('span', { class: 'grow' }, t('online_steps'))));
 
 	inner.append(h('h2', { class: 'section-heading' }, t('online_title')));
 	if (!net.configured) {
 		inner.append(h('div', { class: 'card compact notice warn' }, icon('cloud_off'), h('span', {}, t('online_not_configured'))));
 	} else {
+		inner.append(h('div', { class: 'setting' }, icon('key', 'lead'),
+			h('div', { class: 'grow' }, h('div', { class: 'setting-title' }, t('online_token_title')),
+				h('div', { class: 'setting-desc' }, t(net.tokenReady ? 'online_token_ready' : 'online_token_desc'))),
+			h('button', { class: 'btn secondary small', onclick: promptFrpToken }, icon('edit'), t('online_token_button'))));
+		if (!net.helperReady) {
+			inner.append(h('div', { class: 'card compact notice warn' }, icon('warning'), h('span', {}, t('online_helper_missing'))));
+		}
 		const create = h('div', { class: 'setting' }, icon('add_home', 'lead'),
 			h('div', { class: 'grow' }, h('div', { class: 'setting-title' }, t('online_create_title')),
 				h('div', { class: 'setting-desc' }, net.continuing ? t('online_create_continuing') : t('online_create_desc'))),
-			h('button', { class: 'btn primary small', disabled: net.hosting.state !== 'idle', onclick: createRoom }, icon('rocket_launch'), t('online_create_button')));
+			h('button', { class: 'btn primary small', disabled: !net.helperReady || !net.tokenReady || net.hosting.state !== 'idle', onclick: createRoom }, icon('rocket_launch'), t('online_create_button')));
 		inner.append(create);
 		inner.append(h('div', { class: 'row wrap' }, h('h2', { class: 'section-heading grow' }, t('online_rooms_title')),
 			h('button', { class: 'btn secondary small', disabled: ui.scanning, onclick: scanRooms }, icon('refresh'), ui.scanning ? t('online_scanning') : t('refresh'))));
@@ -917,8 +983,11 @@ function nicknameCard(net) {
 }
 
 function roomCard(room, net) {
-	const mismatch = net.gameVersion && room.version !== 'unknown' && room.version !== net.gameVersion;
+	const mismatch = !net.gameVersion || room.version !== net.gameVersion;
 	let meta = t('online_room_version', { version: room.version });
+	if (room.platform) {
+		meta = `${t(`online_platform_${room.platform}`)} · ${meta}`;
+	}
 	if (room.continuing) {
 		meta += t('online_room_continuing');
 	}
@@ -926,10 +995,10 @@ function roomCard(room, net) {
 		meta += t('online_room_mismatch', { version: net.gameVersion });
 	}
 	return h('div', { class: `mod-card${mismatch ? ' problem' : ''}` },
-		h('div', { class: 'mod-head' }, icon(mismatch ? 'warning' : 'meeting_room', 'muted'),
+		h('div', { class: 'mod-head' }, icon(mismatch ? 'warning' : { android: 'phone_android', ios: 'tablet_mac', windows: 'desktop_windows' }[room.platform] || 'meeting_room', 'muted'),
 			h('div', { class: 'grow' }, h('div', { class: 'mod-name ellipsis' }, room.name || t('online_unnamed_room')), h('div', { class: 'mod-meta ellipsis' }, meta)),
 			mismatch ? h('span', { class: 'pill bad' }, t('online_version_differs')) : null,
-			h('button', { class: 'btn primary small', disabled: net.hosting.state !== 'idle', onclick: () => launchOnline(() => api.onlineJoin(room.host, room.port), t('online_joining')) }, t('online_join'))));
+			h('button', { class: 'btn primary small', disabled: mismatch || net.hosting.state !== 'idle', onclick: () => launchOnline(() => api.onlineJoin(room.host, room.port), t('online_joining')) }, mismatch ? t('online_version_differs') : t('online_join'))));
 }
 
 async function scanRooms() {
@@ -951,16 +1020,43 @@ async function scanRooms() {
 	}
 }
 
+async function promptFrpToken() {
+	const token = await modal((box, close) => {
+		const input = h('input', { class: 'text-input', type: 'password', autocomplete: 'off', spellcheck: false, 'aria-label': t('online_token_title') });
+		const submit = () => {
+			if (input.value.trim()) {
+				close(input.value.trim());
+			}
+		};
+		input.addEventListener('keydown', event => { if (event.key === 'Enter') submit(); });
+		box.append(h('h2', {}, t('online_token_title')),
+			h('div', { class: 'body' }, t('online_token_desc')),
+			input,
+			h('div', { class: 'actions' },
+				h('button', { class: 'btn ghost small', onclick: () => close(undefined) }, t('cancel')),
+				h('button', { class: 'btn primary small', onclick: submit }, t('online_token_button'))));
+	});
+	if (token) {
+		await run(() => api.onlineSetFrpToken(token), t('online_token_saved'));
+	}
+}
+
 async function createRoom() {
 	toast(t('online_creating'));
 	await launchOnline(() => api.onlineCreate(), t('online_created'));
 	ui.scanned = false;
 }
 
-/** 联机启动：装好联机组件、写一次性指令再启动游戏；提示被临时关掉的 MOD。 */
+/** 联机启动：装好小屋联机组件、写入 MOD 设置与联机指令再启动游戏；提示已关闭的 MOD。 */
 async function launchOnline(task, message) {
+	if (!await cloudBeforeLaunch()) {
+		return;
+	}
 	await run(task, result => {
 		const notes = [message];
+		if (result && result.disabledConflicts && result.disabledConflicts.length) {
+			notes.push(t('online_disabled_conflicts', { names: result.disabledConflicts.join(', ') }));
+		}
 		if (result && result.disabledOthers && result.disabledOthers.length) {
 			notes.push(t('online_disabled_others', { names: result.disabledOthers.join(', ') }));
 		}
@@ -980,6 +1076,7 @@ function buildAboutPage(inner) {
 			h('div', { class: 'soft', style: { margin: '6px 0 14px' } }, t('about_version', { version: ui.state.appVersion })),
 			window.mascot.mascotRow(64))));
 	inner.append(h('div', { class: 'card about-text' }, h('p', { style: { marginTop: 0 } }, t('about_body')), h('p', { style: { marginBottom: 0 } }, t('about_note'))));
+	inner.append(updateCard());
 	inner.append(h('div', {}, h('button', { class: 'btn secondary small', onclick: () => run(() => api.openExternal(REPO_URL)) }, icon('open_in_new'), t('about_repo'))));
 }
 
@@ -1020,12 +1117,45 @@ document.addEventListener('keydown', event => {
 
 api.onOnlineChanged(() => refresh());
 
-api.onGameExited(() => {
-	toast(t('game_exited'));
+api.onGameExited(info => {
+	if (info && info.crashed) {
+		showCrashPrompt([{ name: info.name, kind: 'game', reason: 'exit_code', exitCode: info.exitCode }]);
+	} else {
+		toast(t('game_exited'));
+	}
 	refresh();
 });
 
-(async function boot() {
+/** 上次游戏 / 启动器异常退出（规范 §5.4）：提示查看或导出日志，每份报告只提示一次。 */
+async function showCrashPrompt(reports) {
+	if (!reports.length) {
+		return;
+	}
+	api.ackCrashes(reports.map(report => report.name)).catch(error => logUi('W', '标记崩溃报告已读失败', error));
+	const describe = report => {
+		if (report.kind === 'launcher') {
+			return t('crash_launcher');
+		}
+		return report.reason === 'exit_code' ? t('crash_game_exit', { code: report.exitCode }) : t('crash_game_unknown');
+	};
+	const choice = await modal((box, close) => {
+		box.append(h('h2', {}, t('crash_title')),
+			h('div', { class: 'body' }, reports.map(report => h('div', {}, icon('error'), ' ', describe(report)))),
+			h('div', { class: 'body soft' }, t('crash_hint')),
+			h('div', { class: 'actions' },
+				h('button', { class: 'btn ghost small', onclick: () => close('dismiss') }, t('crash_dismiss')),
+				h('button', { class: 'btn secondary small', onclick: () => close('export') }, icon('ios_share'), t('logs_export')),
+				h('button', { class: 'btn primary small', onclick: () => close('view') }, icon('description'), t('crash_view_logs'))));
+	});
+	if (choice === 'view') {
+		ui.logs.kind = 'all';
+		openTab('logs');
+	} else if (choice === 'export') {
+		exportLogs();
+	}
+}
+
+async function boot() {
 	ui.state = await api.state();
 	window.i18n.setLanguage(ui.state.settings.language);
 	ui.tab = ui.state.lastTab || 'home';
@@ -1040,4 +1170,12 @@ api.onGameExited(() => {
 	}
 	document.title = `STS2 · ${t('theme_name')}`;
 	render();
-})();
+	if (ui.state.crashes && ui.state.crashes.length) {
+		showCrashPrompt(ui.state.crashes);
+	}
+}
+
+// 页面脚本（pages/*.js）在 app.js 之后加载并注册，等它们都加载完再启动。
+window.addEventListener('DOMContentLoaded', () => {
+	boot().catch(error => logUi('E', '界面启动失败', error));
+});

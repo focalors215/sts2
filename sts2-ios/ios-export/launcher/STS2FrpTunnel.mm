@@ -1,4 +1,5 @@
 #import "STS2FrpTunnel.h"
+#import "STS2Log.h"
 #include <stdlib.h>
 
 // Exported by libfrpbridge.a (src/FrpBridge/bridge.go). Returned strings are malloc'ed.
@@ -31,6 +32,7 @@ static NSString *TomlString(NSString *value) {
 }
 
 static NSError *TunnelError(NSString *message) {
+    message = [STS2Log redact:message];
     // Prefix a Chinese hint for the common frp failures; keep frp's own text for diagnosis.
     NSArray<NSArray<NSString *> *> *hints = @[
         @[@"token", @"令牌（token）与服务器不一致。"],
@@ -74,10 +76,14 @@ static NSError *TunnelError(NSString *message) {
                 proxies:(NSArray<NSDictionary *> *)proxies
              completion:(void (^)(NSError *))completion {
     NSUInteger generation = ++self.generation;
+    [STS2Log registerSecret:token];
+    STS2LogI(STS2LogTagFrp, @"连接 frp 服务器 %@:%ld", server, (long)serverPort);
     void (^finish)(NSError *) = ^(NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (generation != self.generation) return; // superseded by stop/start
             self.running = error == nil;
+            if (error) STS2LogE(STS2LogTagFrp, error, @"frp 隧道启动失败（服务器 %@:%ld）", server, (long)serverPort);
+            else STS2LogI(STS2LogTagFrp, @"frp 隧道已就绪（服务器 %@:%ld，%lu 个代理）", server, (long)serverPort, (unsigned long)proxies.count);
             completion(error);
         });
     };
@@ -122,6 +128,7 @@ static NSError *TunnelError(NSString *message) {
 }
 
 - (void)stop {
+    if (self.running) STS2LogI(STS2LogTagFrp, @"停止 frp 隧道");
     self.generation++;
     self.running = NO;
     dispatch_async(self.queue, ^{ Sts2FrpStop(); });

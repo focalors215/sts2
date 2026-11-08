@@ -38,6 +38,7 @@ public final class SteamAuthStore {
 			if (account.isEmpty() || token.isEmpty()) {
 				return null;
 			}
+			com.godot.game.LauncherLog.registerSecret(token);
 			return new SavedAuthMaterial(account, token, trim(prefs.getString(KEY_GUARD_DATA, "")));
 		});
 	}

@@ -39,4 +39,19 @@
     <string name="online_hint_refused">Cannot reach the frp server: check the address, port and the server firewall / security group.</string>
     <string name="online_hint_eof">The connection was closed by the server or network: check that the port is the frps port and is not blocked by a proxy.</string>
     <string name="online_hint_timeout">Timed out connecting to the frp server: check the network and the server firewall / security group.</string>
+    <string name="online_room_platform_format"> · %1$s</string>
+    <string name="online_platform_android">Android</string>
+    <string name="online_platform_windows">Windows</string>
+    <string name="online_platform_ios">iPad</string>
+    <string name="online_token_title">Host token</string>
+    <string name="online_token_desc">Creating a room needs the online server token (ask the server admin). It is stored only on this device and never in backups, logs or exports; joining does not need it.</string>
+    <string name="online_token_hint">Paste the token</string>
+    <string name="online_token_button">Set host token</string>
+    <string name="online_token_clear">Clear</string>
+    <string name="online_token_saved_state">Host token saved.</string>
+    <string name="online_token_missing_state">No host token yet; set one before creating a room.</string>
+    <string name="online_token_required">Creating a room needs the host token. Set it with "Set host token" first.</string>
+    <string name="online_compat_title">Compat pack lacks online rooms</string>
+    <string name="online_compat_disabled">The compatibility pack is turned off. Online rooms run inside the compatibility pack; turn it on in Settings.</string>
+    <string name="online_compat_unsupported_format">The compatibility pack of this launch profile (%1$s, %2$s) has no online room support. Update it under Versions → Compatibility packs; online rooms support v0.107.1 and v0.111.0.</string>
 </resources>

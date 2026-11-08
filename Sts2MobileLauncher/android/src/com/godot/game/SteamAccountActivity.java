@@ -1700,6 +1700,7 @@ public class SteamAccountActivity extends AppCompatActivity {
 					showMessage(result);
 				});
 			} catch (Exception exception) {
+				LauncherLog.e(LauncherLog.TAG_CLOUD, "Steam 游戏本体下载失败", exception);
 				runOnUiThread(() -> {
 					busy = false;
 					downloadingPayload = false;
@@ -1810,6 +1811,7 @@ public class SteamAccountActivity extends AppCompatActivity {
 					showMessage(result);
 				});
 			} catch (Exception exception) {
+				LauncherLog.e(LauncherLog.TAG_CLOUD, "Steam 云存档操作失败", exception);
 				Sts2SteamCloudSyncManager.CloudConflictException conflict = findCloudConflict(exception);
 				runOnUiThread(() -> {
 					busy = false;
@@ -1874,6 +1876,7 @@ public class SteamAccountActivity extends AppCompatActivity {
 					showMessage(result);
 				});
 			} catch (Exception exception) {
+				LauncherLog.e(LauncherLog.TAG_CLOUD, "Steam 操作失败", exception);
 				runOnUiThread(() -> {
 					busy = false;
 					dismissOperationDialog();

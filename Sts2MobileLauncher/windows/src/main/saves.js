@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { extractZip, zipDirectory } = require('./ziputil');
+const { log } = require('./logger');
 
 const SNAPSHOT_SCHEMA = 1;
 
@@ -25,6 +26,10 @@ function listAccounts(saveRoot) {
 		try {
 			entries = fs.readdirSync(dir, { withFileTypes: true });
 		} catch (error) {
+			// 存档根目录还不存在（没运行过游戏）是常态。
+			if (error.code !== 'ENOENT') {
+				log().w('saves', `读取存档目录失败: ${dir}`, error);
+			}
 			return;
 		}
 		if (entries.some(e => e.isFile() && e.name === 'settings.save')) {
@@ -97,6 +102,10 @@ function listSnapshots(dataDir, account) {
 	try {
 		names = fs.readdirSync(dir).filter(name => name.endsWith('.zip'));
 	} catch (error) {
+		// 还没有快照目录。
+		if (error.code !== 'ENOENT') {
+			log().w('saves', `读取快照目录失败: ${dir}`, error);
+		}
 		return [];
 	}
 	return names.map(name => {
@@ -122,6 +131,7 @@ async function createSnapshot(dataDir, account, reason, keep) {
 		file = path.join(dir, `${timestamp()}-${n}-${reason}.zip`);
 	}
 	await zipDirectory(account.path, file, { schema: SNAPSHOT_SCHEMA, account: account.id, reason, createdAt: new Date().toISOString() });
+	log().i('saves', `已创建存档快照（${reason}）: ${path.basename(file)}`);
 	pruneSnapshots(dataDir, account, keep);
 	return file;
 }
@@ -168,13 +178,16 @@ async function restoreSnapshot(dataDir, account, snapshotPath, keep) {
 		try {
 			moveDirectory(restored, account.path);
 		} catch (error) {
+			log().e('saves', `恢复快照时替换存档失败，回滚: ${account.path}`, error);
 			fs.rmSync(account.path, { recursive: true, force: true });
 			fs.renameSync(rollback, account.path);
 			throw error;
 		}
 		fs.rmSync(rollback, { recursive: true, force: true });
 		fs.rmSync(work, { recursive: true, force: true });
+		log().i('saves', `已恢复快照 ${path.basename(snapshotPath)} 到 ${account.id}`);
 	} catch (error) {
+		log().e('saves', `恢复快照失败: ${snapshotPath}`, error);
 		fs.rmSync(work, { recursive: true, force: true });
 		throw error;
 	}

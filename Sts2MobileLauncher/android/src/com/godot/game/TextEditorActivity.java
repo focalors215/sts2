@@ -332,6 +332,7 @@ public class TextEditorActivity extends AppCompatActivity {
 	}
 
 	private void showError(Exception exception) {
+		LauncherLog.e("ui", "操作失败（已提示用户）: " + getClass().getSimpleName(), exception);
 		showSnackbar(getString(R.string.error_operation_failed) + ": " + buildErrorDetail(exception), Snackbar.LENGTH_LONG);
 	}
 

@@ -14,7 +14,9 @@ public final class NexusModsStorePreferences {
 	}
 
 	public static String getPersonalApiKey(Context context) {
-		return preferences(context).getString(KEY_PERSONAL_API_KEY, "");
+		String key = preferences(context).getString(KEY_PERSONAL_API_KEY, "");
+		LauncherLog.registerSecret(key);
+		return key;
 	}
 
 	public static boolean hasPersonalApiKey(Context context) {

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="previous_launch_failed_title">The game exited abnormally last time</string>
+    <string name="previous_launch_failed_view_logs">View / export logs</string>
+    <string name="log_viewer_filter_launcher">Launcher / online</string>
+    <string name="log_viewer_source_launcher">Launcher / online log</string>
+</resources>

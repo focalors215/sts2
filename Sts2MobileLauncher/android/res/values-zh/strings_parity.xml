@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="previous_launch_failed_title">上次游戏异常退出</string>
+    <string name="previous_launch_failed_view_logs">查看 / 导出日志</string>
+    <string name="log_viewer_filter_launcher">启动器/联机</string>
+    <string name="log_viewer_source_launcher">启动器/联机日志</string>
+</resources>

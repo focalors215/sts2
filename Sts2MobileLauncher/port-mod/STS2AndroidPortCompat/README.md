@@ -111,16 +111,36 @@ LAN multiplayer compatibility is implemented as Harmony patches in
 `Patches/LanMultiplayerPatches.cs`. It reads `lan_multiplayer_enabled`,
 `lan_compatibility_mod_names`, `lan_use_custom_player_id`,
 `lan_use_custom_platform_player_id`, `lan_custom_player_id`, `lan_join_host`,
-`lan_join_port`, `lan_multiplayer_save_player_id`, `max_multiplayer_enabled`,
+`lan_join_port`, `lan_player_id`, `max_multiplayer_enabled`,
 and `max_multiplayer_players` from companion settings instead of adding
-Android-only fields to the imported PC game assembly. Multiplayer run-save
-canonicalization keeps a hidden stable `lan_multiplayer_save_player_id` so
-changing the custom platform/player ID does not make `current_run_mp.save`
-look like it belongs to another local player. `lan_multiplayer_enabled` is the
+Android-only fields to the imported PC game assembly. Multiplayer identity
+follows the cross-platform rule in the parent repository's
+`doc/architecture/cross-platform-parity.md` §3.4: the original `ENetHost`
+always uses NetId 1, joiners use the stable `lan_player_id` (or the custom
+player ID), and `LoadAndCanonicalizeMultiplayerRunSave` resolves the local
+player as "stable ID if present in the save, otherwise 1". A save that contains
+neither is rejected as an identity mismatch without letting the original rename
+it as broken, and only the device that hosted a run (NetId 1) may host it
+again. The legacy `lan_multiplayer_save_player_id` key is no longer read but is
+still preserved by the settings merge. `lan_multiplayer_enabled` is the
 local multiplayer patch master switch;
 when it is off, or when `sts2_lan_connect` / STS2 Game Lobby is already loaded,
 the whole local LAN patch set is skipped to avoid protocol conflicts with that
 MOD.
+
+`Patches/RemoteRoomPatches.cs` consumes the launcher's one-shot
+`DataDir/launcher/pending-action.json` (online rooms, §3.3 of the same document)
+on the v0.107.1 and v0.111.0 targets: actions older than 600 s, unknown types
+and invalid addresses are dropped with an in-game error, `host` opens or
+continues the multiplayer lobby and `join` runs the original
+`NMainMenu.JoinGame`. Those targets declare the `online_rooms` capability in
+`targets/active/*/target.json`, which the build copies into the schema 2
+manifest so the launcher can tell whether a compat pack supports online rooms.
+`[OnlineRoom]` lines go to the game log and to
+`DataDir/launcher/online-game.log` (launcher log format, tag `online`); network
+error popups shown during an online session are logged with the original
+`NetErrorInfo` text. `tests/OnlineRoomProtocol.Tests` covers the pending-action
+parser, save identity and log format without game code.
 
 The LAN patch deliberately does not patch `MessageTypes.ToId`,
 `MessageTypes.TryGetMessageType`, or `NetMessageBus.TryDeserializeMessage`.

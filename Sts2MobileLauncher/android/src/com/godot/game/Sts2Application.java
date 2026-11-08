@@ -17,6 +17,7 @@ public class Sts2Application extends Application {
 	@Override
 	public void onCreate() {
 		super.onCreate();
+		LauncherLog.init(this);
 		AndroidRuntimeEnvironment.configure(this, "Sts2Application");
 		Sts2LogcatCollector.start(this);
 
@@ -32,6 +33,31 @@ public class Sts2Application extends Application {
 			.errorActivity(Sts2CrashActivity.class)
 			.customCrashDataCollector(new Sts2CrashDataCollector(this))
 			.apply();
+		installUncaughtExceptionLogger();
+		LauncherLog.i(LauncherLog.TAG_APP, "进程启动 " + BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ") process=" + currentProcessName()
+			+ " Android " + Build.VERSION.RELEASE + " / " + Build.MANUFACTURER + " " + Build.MODEL);
+	}
+
+	// Every uncaught Java exception is written to launcher.log before the crash page (CustomActivityOnCrash) takes over.
+	private static void installUncaughtExceptionLogger() {
+		Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
+		Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
+			try {
+				LauncherLog.e(LauncherLog.TAG_APP, "未捕获异常 thread=" + thread.getName(), error);
+			} catch (Throwable ignored) {
+				// Never let logging hide the original crash.
+			}
+			if (previous != null) {
+				previous.uncaughtException(thread, error);
+			}
+		});
+	}
+
+	private static String currentProcessName() {
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+			return Application.getProcessName();
+		}
+		return String.valueOf(Process.myPid());
 	}
 
 	private static final class Sts2CrashDataCollector implements CustomActivityOnCrash.CustomCrashDataCollector {

@@ -21,6 +21,7 @@ public final class LlmSettings {
 	public static LlmConfig read(Context context) throws IOException {
 		try {
 			SharedPreferences p = prefs(context);
+			com.godot.game.LauncherLog.registerSecret(p.getString("api_key", ""));
 			return new LlmConfig(p.getString("base_url", ""), p.getString("api_key", ""),
 				p.getString("model", ""), p.getString("effort", ""));
 		} catch (Exception e) {
