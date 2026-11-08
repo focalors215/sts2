@@ -29,7 +29,7 @@ PC 原版的多人菜单只有 Steam 好友联机。启动器内置第三方 MOD
 
 MOD 没有命令行或一次性指令入口，所以启动器无法代点这两步。启用 MOD 后游戏使用 `modded` 存档目录，原版存档不会自动带入；多人存档在 `<账号>/modded/profileN/saves/current_lan_run_mp.save`，房间卡据此显示「继续存档」。内置 MOD 按 v0.107.1 原版程序集构建，只有 v0.107.1 游戏配置可联机；Android / iPad 启动器目前尚未内置这个 MOD，跨端联机暂不可用。即使能发现彼此的在线房间，也不要把发现房间视作跨端兼容性验证。Steam 好友联机不受影响。
 
-在线房间与 Android / iPad 同一协议：服务器上 20 个槽位，槽位 i 把本机 UDP 33771 映射到服务器 UDP `33771+i`，房间卡 JSON 发布在 TCP `34771+i`。frp 客户端是 `frp-helper/`（官方 frp v0.71.1 库编成的 `sts2-frpc.exe`），由启动器作为子进程运行，stdin 关闭即退出；当房主时“启动后关闭启动器”会改为最小化，退出游戏（直接运行 exe 时）或点“关闭房间”即关闭隧道。公开构建默认不内嵌 FRP 令牌，在线房间列表与创建房间不可用，局域网直连仍可使用。自行私有构建且明确设置 `STS2_EMBED_FRP_TOKEN=1` 时，`prepare-assets` 才会从 `.env` 的 `STS2_FRP_SERVER` / `STS2_FRP_SERVER_PORT` / `STS2_FRP_TOKEN` 生成 ignored 的 `assets/generated/online.json`。不要将含令牌的构建上传公开仓库。
+在线房间与 Android / iPad 同一协议：服务器上 20 个槽位，槽位 i 把本机 UDP 33771 映射到服务器 UDP `33771+i`，房间卡 JSON 发布在 TCP `34771+i`。frp 客户端是 `frp-helper/`（官方 frp v0.71.1 库编成的 `sts2-frpc.exe`），由启动器作为子进程运行，stdin 关闭即退出；当房主时“启动后关闭启动器”会改为最小化，退出游戏（直接运行 exe 时）或点“关闭房间”即关闭隧道。公开构建只内嵌 FRP 服务器地址与端口，不内嵌令牌；加入在线房间无需令牌，房主在「联机小屋 → 输入令牌」窗口输入令牌后才可创建在线房间。令牌只在本次启动器进程内保留，不写进启动器配置或安装包；启动器创建隧道时仍会在本机用户数据目录的 `frp/frpc.toml` 中写入令牌供 frp 客户端读取，不要共享这个文件。`prepare-assets` 从 `.env` 的 `STS2_FRP_SERVER` / `STS2_FRP_SERVER_PORT` 生成 ignored 的 `assets/generated/online.json`；未配置服务器时仍可局域网直连。
 
 构建：
 

@@ -155,6 +155,6 @@ test('loads the build-time server config', () => {
 	const dir = tempDir();
 	const file = path.join(dir, 'online.json');
 	assert.strictEqual(online.loadServerConfig(file), null);
-	fs.writeFileSync(file, JSON.stringify({ server: ' example.test ', serverPort: '7001', token: 't' }));
-	assert.deepStrictEqual(online.loadServerConfig(file), { server: 'example.test', serverPort: 7001, token: 't' });
+	fs.writeFileSync(file, JSON.stringify({ server: ' example.test ', serverPort: '7001' }));
+	assert.deepStrictEqual(online.loadServerConfig(file), { server: 'example.test', serverPort: 7001 });
 });

@@ -16,6 +16,7 @@ let mainWindow = null;
 let config = null;
 let gameRunning = false;
 let roomHost = null;
+let frpToken = '';
 const profileInfoCache = new Map();
 
 /** 打包后在 resources/，开发时在 windows/resources/（tools/windows/build-*.sh 生成）。 */
@@ -146,6 +147,7 @@ function onlineState(profile, account) {
 	const version = (info && info.version) || '';
 	return {
 		configured: !!serverConfig,
+		tokenReady: !!frpToken,
 		server: serverConfig ? serverConfig.server : '',
 		modReady: online.modsReady(onlinePaths.mods()),
 		modInstalled: online.modsInstalled(info && info.modsDir),
@@ -303,6 +305,10 @@ function registerIpc() {
 	handle('game:launch', () => launchCurrent({}));
 
 	handle('online:setNickname', nickname => config.updateOnline({ nickname }));
+	handle('online:setFrpToken', token => {
+		frpToken = String(token || '').trim();
+		return !!frpToken;
+	});
 	handle('online:scan', () => {
 		const serverConfig = online.loadServerConfig(onlinePaths.server());
 		if (!serverConfig) {
@@ -315,6 +321,9 @@ function registerIpc() {
 		if (!serverConfig) {
 			throw new Error('online_not_configured');
 		}
+		if (!frpToken) {
+			throw new Error('online_token_required');
+		}
 		const prepared = await prepareOnlineLaunch();
 		const account = onlineAccount(currentProfile());
 		// 房主用固定端口开房，frp 隧道映射的就是它；地址留给加入方，这里不写。
@@ -326,11 +335,11 @@ function registerIpc() {
 			roomHost = new online.RoomHost({
 				helperPath: onlinePaths.helper(),
 				workDir: path.join(dataDir(), 'frp'),
-				serverConfig,
+				serverConfig: { ...serverConfig, token: frpToken },
 				onStateChange: notifyOnline,
 			});
 		}
-		roomHost.serverConfig = serverConfig;
+		roomHost.serverConfig = { ...serverConfig, token: frpToken };
 		const room = await roomHost.create({ nickname: config.online.nickname, version: prepared.version || 'unknown', continuing: online.hasMultiplayerSave(account.path) });
 		try {
 			return { room, ...prepared, ...(await launchOnline(true)) };

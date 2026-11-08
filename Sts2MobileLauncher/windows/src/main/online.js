@@ -63,13 +63,13 @@ function modsInstalled(modsDir) {
 		&& hasFiles(path.join(modsDir, BASE_LIB_ID), BASE_LIB_FILES);
 }
 
-/** 构建时由 scripts/prepare-assets.js 从 .env（STS2_FRP_SERVER / _PORT / _TOKEN）写入，不入库。 */
+/** 构建时由 scripts/prepare-assets.js 写入公开的 FRP 地址与端口；令牌不入包。 */
 function loadServerConfig(file) {
 	try {
 		const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
 		const port = Number.parseInt(raw.serverPort, 10);
 		if (typeof raw.server === 'string' && raw.server.trim()) {
-			return { server: raw.server.trim(), serverPort: Number.isFinite(port) ? port : 7000, token: String(raw.token || '') };
+			return { server: raw.server.trim(), serverPort: Number.isFinite(port) ? port : 7000 };
 		}
 	} catch (error) {
 		// 未配置。

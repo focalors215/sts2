@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('launcher', {
 	openExternal: url => call('shell:external', url),
 	launch: () => call('game:launch'),
 	onlineSetNickname: nickname => call('online:setNickname', nickname),
+	onlineSetFrpToken: token => call('online:setFrpToken', token),
 	onlineScan: () => call('online:scan'),
 	onlineCreate: () => call('online:create'),
 	onlineJoin: (host, port) => call('online:join', host, port),

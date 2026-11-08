@@ -109,7 +109,7 @@ function switchControl(checked, onChange, disabled, label) {
 function formatError(error) {
 	const message = error && error.message ? error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(error);
 	const known = { no_profile: 'err_no_profile', game_not_ready: 'err_game_not_ready', game_running: 'err_game_running', no_settings_save: 'err_no_settings_save', no_manifest: 'no_manifest',
-		online_not_configured: 'online_not_configured', online_component_missing: 'online_mod_missing', online_no_settings: 'online_no_settings', online_bad_address: 'online_bad_address', online_unsupported_version: 'online_unsupported_version' };
+		online_not_configured: 'online_not_configured', online_token_required: 'online_token_required', online_component_missing: 'online_mod_missing', online_no_settings: 'online_no_settings', online_bad_address: 'online_bad_address', online_unsupported_version: 'online_unsupported_version' };
 	return known[message] ? t(known[message]) : t('error', { message });
 }
 
@@ -865,13 +865,17 @@ function buildNetworkPage(inner) {
 	if (!net.configured) {
 		inner.append(h('div', { class: 'card compact notice warn' }, icon('cloud_off'), h('span', {}, t('online_not_configured'))));
 	} else {
+		inner.append(h('div', { class: 'setting' }, icon('key', 'lead'),
+			h('div', { class: 'grow' }, h('div', { class: 'setting-title' }, t('online_token_title')),
+				h('div', { class: 'setting-desc' }, t(net.tokenReady ? 'online_token_ready' : 'online_token_desc'))),
+			h('button', { class: 'btn secondary small', onclick: promptFrpToken }, icon('edit'), t('online_token_button'))));
 		if (!net.helperReady) {
 			inner.append(h('div', { class: 'card compact notice warn' }, icon('warning'), h('span', {}, t('online_helper_missing'))));
 		}
 		const create = h('div', { class: 'setting' }, icon('add_home', 'lead'),
 			h('div', { class: 'grow' }, h('div', { class: 'setting-title' }, t('online_create_title')),
 				h('div', { class: 'setting-desc' }, net.continuing ? t('online_create_continuing') : t('online_create_desc'))),
-			h('button', { class: 'btn primary small', disabled: !net.helperReady || net.hosting.state !== 'idle', onclick: createRoom }, icon('rocket_launch'), t('online_create_button')));
+			h('button', { class: 'btn primary small', disabled: !net.helperReady || !net.tokenReady || net.hosting.state !== 'idle', onclick: createRoom }, icon('rocket_launch'), t('online_create_button')));
 		inner.append(create);
 		inner.append(h('div', { class: 'row wrap' }, h('h2', { class: 'section-heading grow' }, t('online_rooms_title')),
 			h('button', { class: 'btn secondary small', disabled: ui.scanning, onclick: scanRooms }, icon('refresh'), ui.scanning ? t('online_scanning') : t('refresh'))));
@@ -962,13 +966,34 @@ async function scanRooms() {
 	}
 }
 
+async function promptFrpToken() {
+	const token = await modal((box, close) => {
+		const input = h('input', { class: 'text-input', type: 'password', autocomplete: 'off', spellcheck: false, 'aria-label': t('online_token_title') });
+		const submit = () => {
+			if (input.value.trim()) {
+				close(input.value.trim());
+			}
+		};
+		input.addEventListener('keydown', event => { if (event.key === 'Enter') submit(); });
+		box.append(h('h2', {}, t('online_token_title')),
+			h('div', { class: 'body' }, t('online_token_desc')),
+			input,
+			h('div', { class: 'actions' },
+				h('button', { class: 'btn ghost small', onclick: () => close(undefined) }, t('cancel')),
+				h('button', { class: 'btn primary small', onclick: submit }, t('online_token_button'))));
+	});
+	if (token) {
+		await run(() => api.onlineSetFrpToken(token), t('online_token_saved'));
+	}
+}
+
 async function createRoom() {
 	toast(t('online_creating'));
 	await launchOnline(() => api.onlineCreate(), t('online_created'));
 	ui.scanned = false;
 }
 
-/** 联机启动：装好联机组件、写一次性指令再启动游戏；提示被临时关掉的 MOD。 */
+/** 联机启动：装好 Reforged 与 BaseLib、写入 MOD 设置再启动游戏；提示已关闭的 MOD。 */
 async function launchOnline(task, message) {
 	await run(task, result => {
 		const notes = [message];
